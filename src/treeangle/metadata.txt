@@ -1,0 +1,10 @@
+[general]
+name=TreeAngle
+description=for fallen-tree annotations of crown width, fallen length, fall direction, and damage classification
+about=TreeAngle records a trunk base or break origin plus two distal crown edges. It saves  coordinates, measurements, damage attributes, and raster provenance to a GeoPackage layer.
+version=0.1.1
+qgisMinimumVersion=3.28
+author=quin
+email=
+repository=
+icon=icon.svg

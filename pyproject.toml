@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project] 
+name = "treeangle"
+version = "0.1.0"
+description = "three point, geolocated fallen tree annotation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT"}
+author = [{ name = "fractal.fish"}]
+dependencies = []
+
+[tools.setuptools.packages.find]
+include = ["treeangle"]
+
+[tool.setuptools.package-data]
+treeangle = ["metadata.txt", "icon.svg"]
