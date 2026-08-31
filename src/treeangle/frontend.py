@@ -81,18 +81,18 @@ ANNOTATOR_KEY = "treeangle/annotator"
 
 
 
-KITE_STROKE = QColor(255, 0, 0, 235)
-KITE_FILL = QColor(0, 255, 0, 45) 
+KITE_STROKE = QColor(255, 0, 0, 35)
+KITE_FILL = QColor(0, 255, 0, 25) 
 KITE_WIDTH = 1 
-KITE_MINOR = QColor(45, 125, 50, 240)
-KITE_MAJOR = QColor(211,47,47,240)
-KITE_VERTEX = QColor(20,20,20,244)
+KITE_MINOR = QColor(45, 125, 50, 24)
+KITE_MAJOR = QColor(211,47,47,24)
+KITE_VERTEX = QColor(20,20,20,24)
 
 
 
-EDIT_STROKE = QColor(25, 118, 210, 245)
+EDIT_STROKE = QColor(25, 118, 210, 24)
 EDIT_FILL = QColor(25, 118, 210, 35)
-EDIT_STROKE_WIDTH = 2 
+EDIT_STROKE_WIDTH = 1 
 
 
 class FormDialog(QDialog): 
@@ -611,12 +611,12 @@ def _arrow_geometry(
 
     head_length = min(
             max(
-                map_unit_per_pixel * 11.0,
+                map_unit_per_pixel * 5.0,
                 1.0e-12,
                 ), 
             axis_length * 0.35
             )
-    head_width = head_length * 0.50 
+    head_width = head_length * 0.10 
 
     head_base_x = end.x() - unit_x * head_length 
     head_base_y = end.y() - unit_y * head_length 
