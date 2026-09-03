@@ -81,9 +81,9 @@ ANNOTATOR_KEY = "treeangle/annotator"
 
 
 
-KITE_STROKE = QColor(255, 0, 0, 35)
-KITE_FILL = QColor(0, 255, 0, 25) 
-KITE_WIDTH = 1 
+KITE_STROKE = QColor(31, 236, 66, 180)
+KITE_FILL = QColor(236, 31, 31, 25) 
+KITE_WIDTH = 2 
 KITE_MINOR = QColor(45, 125, 50, 24)
 KITE_MAJOR = QColor(211,47,47,24)
 KITE_VERTEX = QColor(20,20,20,24)
@@ -101,11 +101,26 @@ class FormDialog(QDialog):
     def __init__(
             self, 
             parent: QWidget | None = None, 
-            template: DamageClass | None = None 
+            template: DamageClass | None = None, 
+            edit_existing: bool = False, 
             ) -> None: 
         super().__init__(parent)
+        
+        if edit_existing and template is None: 
+            raise ValueError(
+                    " EDIT requires an existing damage class "
+                    )
 
-        self.setWindowTitle("CREATE DAMAGE CLASS")
+        self._editing_class_id = (
+                template.class_id 
+                if edit_existing and template is not None 
+                else None 
+                )
+        self.setWindowTitle(
+                "EDIT DAMAGE CLASS" 
+                if edit_existing 
+                else "CREATE DAMAGE CLASS"
+                )
         self.setMinimumWidth(440)
 
         current = (
@@ -118,6 +133,9 @@ class FormDialog(QDialog):
         self.name_edit.setPlaceholderText(
                 "EX: uprooted, heavy branch loss"
                 )
+
+        if edit_existing and template is not None: 
+            self.name_edit.setText(template.name)
 
         self.failure_mode = _dropdown(FailureMode)
 
@@ -337,6 +355,7 @@ class FormDialog(QDialog):
         return DamageClass.create(
             self.name_edit.text().strip(),
             attributes,
+            class_id = self._editing_class_id,
             mosaic_id=self.mosaic_id.text().strip(),
             bundle_id=self.bundle_id.text().strip(),
             tile_id=self.tile_id.text().strip(),
@@ -611,12 +630,12 @@ def _arrow_geometry(
 
     head_length = min(
             max(
-                map_unit_per_pixel * 5.0,
+                map_unit_per_pixel * 11.0,
                 1.0e-12,
                 ), 
-            axis_length * 0.35
+            axis_length * 0.55
             )
-    head_width = head_length * 0.10 
+    head_width = head_length * 10 
 
     head_base_x = end.x() - unit_x * head_length 
     head_base_y = end.y() - unit_y * head_length 
@@ -626,16 +645,16 @@ def _arrow_geometry(
             head_base_y + unit_x * head_width
             )
 
-    arrow_right = QgsPointXY(
-            head_base_x + unit_y * head_width, 
-            head_base_y - unit_x * head_width
-            )
+    #arrow_right = QgsPointXY(
+    #        head_base_x + unit_y * head_width, 
+    #        head_base_y - unit_x * head_width
+    #        )
     
     return QgsGeometry.fromMultiPolylineXY(
             [
                 [origin, end], 
                 [end, arrow_left], 
-                [end, arrow_right]
+                #  [end, arrow_right]
             ]
         )
 

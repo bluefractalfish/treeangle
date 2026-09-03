@@ -233,12 +233,13 @@ class DamageClass:
         name: str,
         attributes: AttributeForm,
         *,
+        class_id: str | None = None, 
         mosaic_id: str = "",
         bundle_id: str = "",
         tile_id: str = "",
     ) -> "DamageClass":
         return cls(
-            class_id=str(uuid4()),
+            class_id=class_id or str(uuid4()),
             name=name.strip(),
             attributes=attributes,
             mosaic_id=mosaic_id.strip(),
@@ -314,35 +315,117 @@ class DamageClassStore:
                     None,
                 ) 
 
-    def add(self, 
-            damage_class: DamageClass,
-            *,
-            make_active: bool = True
-            ) -> None: 
+    def add(
+        self,
+        damage_class: DamageClass,
+        *,
+        make_active: bool = True,
+    ) -> None:
+        normalized_name = damage_class.name.casefold()
 
-        n_name = damage_class.name.casefold()
-        if any(item.name.casefold() == n_name 
-               for item in self._classes
-               ):
-            raise ValueError(f"a damage class named {damage_class.name} already exists")
+        if any(
+            item.name.casefold() == normalized_name
+            for item in self._classes
+        ):
+            raise ValueError(
+                f'a damage class named "{damage_class.name}" '
+                "already exists."
+            )
+
         self._classes.append(damage_class)
-        if make_active: 
-            self._active_id = damage_class.class_id 
-        
+
+        if make_active:
+            self._active_id = damage_class.class_id
+
         self._save()
 
-    def set_active(self, class_id: str) -> None: 
+
+    def update(
+        self,
+        damage_class: DamageClass,
+    ) -> None:
+        """replace an existing class while preserving its UUID"""
+
+        matching_index = None
+
+        for index, existing in enumerate(self._classes):
+            if existing.class_id == damage_class.class_id:
+                matching_index = index
+                break
+
+        if matching_index is None:
+            raise ValueError(
+                "the damage class being edited no longer exists"
+            )
+
+        normalized_name = damage_class.name.casefold()
+
+        duplicate_exists = any(
+            existing.class_id != damage_class.class_id
+            and existing.name.casefold() == normalized_name
+            for existing in self._classes
+        )
+
+        if duplicate_exists:
+            raise ValueError(
+                f'a damage class named "{damage_class.name}" '
+                "already exists."
+            )
+
+        self._classes[matching_index] = damage_class
+        self._active_id = damage_class.class_id
+        self._save()
+
+
+    def delete(self, class_id: str) -> None:
+        """delete a saved template, not existing tree attributes"""
+
+        matching_index = None
+
+        for index, existing in enumerate(self._classes):
+            if existing.class_id == class_id:
+                matching_index = index
+                break
+
+        if matching_index is None:
+            raise ValueError(
+                "The damage class no longer exists."
+            )
+
+        self._classes.pop(matching_index)
+
+        if self._active_id == class_id:
+            if self._classes:
+                next_index = min(
+                    matching_index,
+                    len(self._classes) - 1,
+                )
+                self._active_id = (
+                    self._classes[next_index].class_id
+                )
+            else:
+                self._active_id = ""
+
+        self._save()
+
+
+    def set_active(self, class_id: str) -> None:
         known_ids = {
-                item.class_id 
-                for item in self._classes 
-                }
-        
-        if class_id and class_id not in known_ids: 
-            raise ValueError("the selected damage class no longer exists")
+            item.class_id
+            for item in self._classes
+        }
 
-        self._active_id = class_id 
-        self._settings.setValue(ACTIVE_CLASS_KEY, self._active_id) 
+        if class_id and class_id not in known_ids:
+            raise ValueError(
+                "The selected damage class no longer exists."
+            )
 
+        self._active_id = class_id
+
+        self._settings.setValue(
+            ACTIVE_CLASS_KEY,
+            self._active_id,
+        )
     def _load(self) -> list[DamageClass]: 
         raw = self._settings.value(CLASSES_KEY, "[]")
         try: 

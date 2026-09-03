@@ -69,10 +69,10 @@ ROLE_FIELDS = (
         )
 
 FALL_ARROW = {
-        "start_width": 0.35, 
-        "width": 0.6, 
-        "head_length": 2.8, 
-        "head_thickness": 1.2, 
+        "start_width_px": 2.00, 
+        "width_px": 3.0, 
+        "head_length_px": 10.0, 
+        "head_height_px": 8.0, 
         "color": "211, 47, 47, 235"
         } 
 
@@ -536,13 +536,17 @@ def _configure_fall_vector_layer(layer: QgsVectorLayer) -> None:
             if index >= 0: 
                 layer.setFieldAlias(index, alias)
 
-        arrow = QgsArrowSymbolLayer()
-        arrow.setArrowStartWidth(FALL_ARROW["start_width"])
-        arrow.setArrowWidth(FALL_ARROW["width"])
-        arrow.setHeadLength(FALL_ARROW["head_length"])
-        arrow.setHeadThickness(FALL_ARROW["head_thickness"])
+        arrow = QgsArrowSymbolLayer() 
+
+        arrow.setOutputUnit(Qgis.RenderUnit.Pixels)
+
+        arrow.setArrowStartWidth(FALL_ARROW["start_width_px"])
+        arrow.setArrowWidth(FALL_ARROW["width_px"])
+        arrow.setHeadLength(FALL_ARROW["head_length_px"])
+        arrow.setHeadThickness(FALL_ARROW["head_length_px"])
         arrow.setIsCurved(False)
         arrow.setIsRepeated(False)
+
         arrow_fill = QgsFillSymbol.createSimple(
                 {"color": str(FALL_ARROW["color"])}  
                 )

@@ -25,6 +25,7 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QLabel,
+    QMessageBox
 )
 
 from qgis.core import (
@@ -92,6 +93,9 @@ class TreeAnglePlugin:
         self.create_class_action: QAction | None = None 
         self.capture_action: QAction | None = None
         self.edit_action: QAction | None = None 
+        
+        self.edit_class_action = None 
+        self.delete_class_action = None 
 
         self.damage_dropdown: QComboBox | None=None 
         self.damage_store = DamageClassStore()
@@ -159,7 +163,16 @@ class TreeAnglePlugin:
                 self._damage_class_selected
                 )
         self.toolbar.addWidget(self.damage_dropdown)
-        self._refresh_damage_dropdown()
+        self._refresh_damage_dropdown() 
+
+        self.edit_class_action = self._create_action(
+                "EDIT CLASS", 
+                self.edit_damage_class,
+                ) 
+        self.delete_class_action = self._create_action(
+                "DELETE CLASS", 
+                self.delete_damage_class
+                )
 
     def initEditor(self) -> None: 
         self.edit_action = self._create_action(
@@ -275,7 +288,105 @@ class TreeAnglePlugin:
         self._refresh_damage_dropdown()
         self._message(f"damage_class: {damage_class.name} is now active ")
         return damage_class 
+    def edit_damage_class(
+            self, 
+            _checked: bool = False, 
+            ) -> DamageClass | None: 
+        active = self.damage_store.active_class 
+        if active is None: 
+            self._message(
+                    "select a damage class to edit",
+                    error = True 
+                    )  
+            return None 
+        dialog = FormDialog(
+                self.iface.mainWindow(), 
+                template=active, 
+                edit_existing=True, 
+                ) 
+        if not _exec_dialog(dialog): 
+            return None 
 
+        edited_class = dialog.result_data()
+
+        try: 
+            self.damage_store.update(edited_class)
+        except ValueError as error: 
+            self._message(
+                    str(error), 
+                    error=True
+                    )
+            return None 
+
+        self._refresh_damage_dropdown() 
+
+        self._message(
+                f"damage class `{edited_class.name}` updated"
+                "existing tree annotations were not changed"
+                )
+        return edited_class 
+    
+    def delete_damage_class(
+            self, 
+            _checked: bool = False
+            ) -> None: 
+        active = self.damage_store.active_class 
+
+        if active is None: 
+            self._message(
+                    "select a damage class to delete", 
+                    error=True
+                    )
+            return 
+
+        standard_button = getattr(
+                QMessageBox, 
+                "StandardButton", 
+                QMessageBox
+                )
+        confirmation = QMessageBox(
+                self.iface.mainWindow()
+                )
+        confirmation.setWindowTitle(
+                "DELETE DAMAGE CLASS "
+                )
+        confirmation.setText(
+                f"delete damage class `{active.name}`?"
+                )
+        confirmation.setInformativeText(
+                "existing tree annotations will keep their copied "
+                "damage values"
+                )
+        delete_button = confirmation.addButton(
+                standard_button.Yes
+                )
+
+        confirmation.addButton(
+                standard_button.Cancel
+                ) 
+
+        _exec_dialog(confirmation)
+
+        if confirmation.clickedButton() is not delete_button: 
+            return 
+
+        try: 
+            self.damage_store.delete(
+                    active.class_id
+                    )
+        except ValueError as error: 
+            self._message(
+                    str(error), 
+                    error=True
+                    ) 
+            return 
+
+        self._refresh_damage_dropdown() 
+        self._message(
+                f"damage class `{active.name}` deleted "
+                "existing annotations were not changed"
+                )
+        
     def _refresh_damage_dropdown(self) -> None: 
         dropdown = self.damage_dropdown 
         if dropdown is None: 
@@ -314,7 +425,7 @@ class TreeAnglePlugin:
             return 
         active = self.damage_store.active_class 
         if active: 
-            self._message(f"damage_class: {active.name} is active")
+            self._message(f"damage_class: `{active.name}` is active")
 
 
     def create_annotation_layer(self, _checked: bool = False) -> QgsVectorLayer | None: 
@@ -326,7 +437,7 @@ class TreeAnglePlugin:
         def_dir = self._default_output_directory()
         path, _ = QFileDialog.getSaveFileName(
                 self.iface.mainWindow(), 
-                "create or open TreeAngle gpkg", 
+                "create or open TreeAngle gpkg ", 
                 str(def_dir / "fallen_kites_01.gpkg"),
                 "GeoPackage (*.gpkg)",
                 )
@@ -457,7 +568,7 @@ class TreeAnglePlugin:
         )
 
         self._message(
-                f"damage_class {class_name}"
+                f"damage_class `{class_name}` "
                 "inscribe fallen tree in kite. "
                 )
 
@@ -554,7 +665,7 @@ class TreeAnglePlugin:
             return  
 
         layer.selectByIds([feature_id])
-        self._message(f"saved {active_class.name}")
+        self._message(f"saved `{active_class.name}`")
         self._refresh_tree_count()
 
     def _ensure_fall_vector_layer(
@@ -747,7 +858,7 @@ class TreeAnglePlugin:
             )
         except (ValueError, RuntimeError) as error:
             self._message(
-                "Tree was deleted, but fall-vector "
+                "tree was deleted, but fall-vector "
                 f"synchronization failed: {error}",
                 error=True,
             )
@@ -766,5 +877,5 @@ class TreeAnglePlugin:
         )
 
         self.tree_count_label.setText(
-            f"Trees: {count}"
+            f"(trees: {count})"
         )
