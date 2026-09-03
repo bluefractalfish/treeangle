@@ -81,13 +81,16 @@ ANNOTATOR_KEY = "treeangle/annotator"
 
 
 
-KITE_STROKE = QColor(31, 236, 66, 180)
-KITE_FILL = QColor(236, 31, 31, 25) 
-KITE_WIDTH = 2 
-KITE_MINOR = QColor(45, 125, 50, 24)
-KITE_MAJOR = QColor(211,47,47,24)
-KITE_VERTEX = QColor(20,20,20,24)
+KITE_STROKE = QColor(255, 120, 0, 255)
+KITE_FILL = QColor(255, 152, 0, 55)
+KITE_MINOR = QColor(40, 180, 255, 255)
+KITE_MAJOR = QColor(220, 30, 50, 255)
+KITE_VERTEX = QColor(255, 255, 255, 255)
+PREVIEW_HALO = QColor(0, 0, 0, 210)
 
+KITE_WIDTH = 2
+AXIS_WIDTH = 2
+VERTEX_SIZE = 6
 
 
 EDIT_STROKE = QColor(25, 118, 210, 24)
@@ -446,20 +449,35 @@ class CaptureTool(QgsMapTool):
                 canvas, 
                 Qgis.GeometryType.Point
                 )
+
+        # styling section 
         self._kite.setStrokeColor(KITE_STROKE)
         self._kite.setFillColor(KITE_FILL)
         self._kite.setWidth(KITE_WIDTH)
-        self._minor_axis.setColor(KITE_MINOR)
-        self._minor_axis.setWidth(KITE_WIDTH)
+        self._kite.setSecondaryStrokeColor(PREVIEW_HALO)
+
+        self._minor_axis.setStrokeColor(KITE_MINOR)
+        self._minor_axis.setWidth(AXIS_WIDTH)
+        self._minor_axis.setSecondaryStrokeColor(PREVIEW_HALO)
+
         self._major_axis.setStrokeColor(KITE_MAJOR)
-        self._major_axis.setFillColor(KITE_MAJOR)
+        self._major_axis.setWidth(AXIS_WIDTH)
+        self._major_axis.setSecondaryStrokeColor(PREVIEW_HALO)
+
         self._vertices.setColor(KITE_VERTEX)
-        self._vertices.setFillColor(KITE_VERTEX)
-        self._vertices.setWidth(1)
+        self._vertices.setWidth(2)
+        self._vertices.setIconSize(VERTEX_SIZE)
+
+        # Keep the preview above raster imagery.
+        self._kite.setZValue(1000)
+        self._minor_axis.setZValue(1001)
+        self._major_axis.setZValue(1002)
+        self._vertices.setZValue(1003)
 
         self.setCursor(
                 QCursor(Qt.CursorShape.CrossCursor)
                 )
+
 
     @property
     def points(self) -> tuple[QgsPointXY, ...]:
@@ -478,7 +496,7 @@ class CaptureTool(QgsMapTool):
         if e.button() != Qt.MouseButton.LeftButton: 
             return 
 
-        point = self.toMapCoordinates(e.pos())
+        point = e.mapPoint()
         self._points.append(point)
 
         if len(self._points) == 4: 
@@ -495,7 +513,7 @@ class CaptureTool(QgsMapTool):
 
         if e is None or not self._points: 
             return 
-        cursor = self.toMapCoordinates(e.pos())
+        cursor = e.mapPoint()
         self._render(cursor)
 
     def keyPressEvent(self, e: QtGui.QKeyEvent | None) -> None:
@@ -566,51 +584,80 @@ class CaptureTool(QgsMapTool):
     def _clear_preview(self) -> None: 
         """ remove all remporary geometries """
 
-        for band in self._bands: 
-            band.reset()
+        self._kite.reset(
+            Qgis.GeometryType.Polygon
+        )
+        self._minor_axis.reset(
+            Qgis.GeometryType.Line
+        )
+        self._major_axis.reset(
+            Qgis.GeometryType.Line
+        )
+        self._vertices.reset(
+            Qgis.GeometryType.Point
+        )
 
     def _render(self, cursor: QgsPointXY | None=None) -> None: 
         """ draw the currently available kite components """
         
-        if self._canvas is None: 
-            return 
+        self._clear_preview() 
 
-        self._clear_preview()
-
-        preview = list(self._points)
+        preview = list(self._points) 
 
         if cursor is not None and len(preview) < 4: 
-            preview.append(cursor)
+            preview.append(cursor) 
 
-        if preview: 
-            vertex_geometry = QgsGeometry.fromMultiPointXY(preview)
+        if not preview: 
+            return 
+        
+        if not self._canvas: 
+            return 
 
-            self._vertices.setToGeometry(vertex_geometry, None)
+        canvas_crs = (
+                self._canvas
+                .mapSettings() 
+                .destinationCrs()
+                )
+        
+        # show clicked points and the moving cursor point 
+        self._vertices.setToGeometry(
+                QgsGeometry.fromMultiPointXY(preview), 
+                canvas_crs
+                )
 
-        if len(preview) >= 2: 
-            arrow = _arrow_geometry(
-                    preview[0], 
-                    preview[1], 
-                    self._canvas.mapUnitsPerPixel()
-                    )
-            self._major_axis.setToGeometry(arrow, None) 
+        #p0 -> p1 arrow before p1 is clicked, the cursor temporarily acts as p1
+        if len(preview) >= 2:
+            arrow_geometry = _arrow_geometry(
+                preview[0],
+                preview[1],
+                self._canvas.mapUnitsPerPixel(),
+            )
 
+            self._major_axis.setToGeometry(
+                arrow_geometry,
+                canvas_crs,
+            )
+
+        # complete kite requires p0, p1, p2, p3 
         if len(preview) < 4: 
             return 
-    
-        
-        # kite rendering creation -> move into Kite? 
 
         base, tip, left, right = preview[:4]
 
-        kite_geometry = QgsGeometry.fromPolygonXY(
-                [[base, left, tip, right, base]]
-                ) 
-        self._kite.setToGeometry(kite_geometry, None)
+        self._kite.setToGeometry(
+                QgsGeometry.fromPolygonXY(
+                    [[base, left, tip, right, base]]
+                    ), 
+                canvas_crs 
+                )
 
-        minor_axis_geometry = QgsGeometry.fromPolylineXY([left, right])
+        self._minor_axis.setToGeometry(
+                QgsGeometry.fromPolylineXY(
+                    [left, right]
+                    ), 
+                canvas_crs 
+                )
 
-        self._minor_axis.setToGeometry(minor_axis_geometry, None)
 
 def _arrow_geometry(
         origin: QgsPointXY, 
