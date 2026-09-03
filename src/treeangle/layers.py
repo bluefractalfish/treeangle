@@ -69,10 +69,10 @@ ROLE_FIELDS = (
         )
 
 FALL_ARROW = {
-        "start_width_px": 2.00, 
-        "width_px": 3.0, 
-        "head_length_px": 10.0, 
-        "head_height_px": 8.0, 
+        "start_width_px": 1.00, 
+        "width_px": 1.0, 
+        "head_length_px": 4.0, 
+        "head_height_px": 4.0, 
         "color": "211, 47, 47, 235"
         } 
 

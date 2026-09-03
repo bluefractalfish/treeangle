@@ -88,9 +88,9 @@ KITE_MAJOR = QColor(220, 30, 50, 255)
 KITE_VERTEX = QColor(255, 255, 255, 255)
 PREVIEW_HALO = QColor(0, 0, 0, 210)
 
-KITE_WIDTH = 2
-AXIS_WIDTH = 2
-VERTEX_SIZE = 6
+KITE_WIDTH = 1
+AXIS_WIDTH = 1
+VERTEX_SIZE = 2
 
 
 EDIT_STROKE = QColor(25, 118, 210, 24)
@@ -465,7 +465,7 @@ class CaptureTool(QgsMapTool):
         self._major_axis.setSecondaryStrokeColor(PREVIEW_HALO)
 
         self._vertices.setColor(KITE_VERTEX)
-        self._vertices.setWidth(2)
+        self._vertices.setWidth(1)
         self._vertices.setIconSize(VERTEX_SIZE)
 
         # Keep the preview above raster imagery.
