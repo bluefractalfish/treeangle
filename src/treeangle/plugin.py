@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qgis.PyQt.QtCore import QStandardPaths
+from qgis.PyQt.QtCore import QStandardPaths, Qt
 from qgis.PyQt.QtGui import QIcon
 
 try:
@@ -44,6 +44,7 @@ from .frontend import (
     CaptureTool,
     EditTool,
     FormDialog,
+    TreeDock
 )
 from .geometry import measure
 from .layers import (
@@ -88,6 +89,8 @@ class TreeAnglePlugin:
         # tools 
         self.capture_tool = None 
         self.edit_tool = None 
+        self.history_dock: TreeDock | None = None 
+        self._watched_annotation_layer: QgsVectorLayer | None = None 
         #actions 
         self.create_action: QAction | None = None 
         self.create_class_action: QAction | None = None 
@@ -132,6 +135,21 @@ class TreeAnglePlugin:
         self.toolbar.addWidget(
             self.tree_count_label
         )
+        
+        self.history_dock = TreeDock(
+            self.iface.mainWindow()
+        )
+
+        self.iface.addDockWidget(
+            Qt.DockWidgetArea.RightDockWidgetArea,
+            self.history_dock,
+        )
+
+        history_action = self.history_dock.toggleViewAction()
+        history_action.setText("HISTORY")
+
+        self.toolbar.addAction(history_action)
+        self.history_dock.show()
 
     def initAnnotator(self) -> None: 
         self.capture_action = self._create_action(
@@ -194,7 +212,7 @@ class TreeAnglePlugin:
                 self.edit_tool 
          and self.canvas.mapTool()
                 is self.edit_tool
-                ): self.canvas.UnsetMapTool(self.edit_tool )
+                ): self.canvas.unsetMapTool(self.edit_tool )
 
         if self.capture_tool: 
             self.capture_tool.clean_up()
@@ -212,7 +230,14 @@ class TreeAnglePlugin:
             self.toolbar.deleteLater() 
             self.toolbar = None 
 
-        self.actions.clear()
+        if self.history_dock is not None:
+            self.iface.removeDockWidget(
+                self.history_dock
+                )
+
+            self.history_dock.deleteLater()
+            self.history_dock = None
+            self.actions.clear()
 
         watched = self._watched_annotation_layer
 
@@ -258,7 +283,7 @@ class TreeAnglePlugin:
 
         self.actions.append(action)
         return action
-
+    
     def create_damage_class(
         self,
         _checked: bool = False,
@@ -476,7 +501,7 @@ class TreeAnglePlugin:
                 str(Path(path).expanduser().resolve()), 
                 )
 
-        self.annotation_layer = layer 
+        self._set_annotation_layer(layer)
         self.fall_vector_layer = vector_layer 
         self.iface.setActiveLayer(layer)
             
@@ -583,8 +608,8 @@ class TreeAnglePlugin:
             self._set_checked(self.edit_action, False)
             self._message("select layer first", error=True)
             return 
-
-        self.annotation_layer = layer 
+        
+        self._set_annotation_layer(layer)
         try: 
             vector_layer = self._ensure_fall_vector_layer(layer)
 
@@ -606,6 +631,9 @@ class TreeAnglePlugin:
                 vector_layer,
                 self._message,
             )
+            self.edit_tool.edit_complete.connect(
+                    self._refresh_tree_history
+                    )
             if self.edit_action:
                 self.edit_tool.setAction(self.edit_action)
 
@@ -667,6 +695,7 @@ class TreeAnglePlugin:
         layer.selectByIds([feature_id])
         self._message(f"saved `{active_class.name}`")
         self._refresh_tree_count()
+        self._refresh_tree_history()
 
     def _ensure_fall_vector_layer(
         self,
@@ -813,7 +842,7 @@ class TreeAnglePlugin:
             except (TypeError, RuntimeError):
                 pass
 
-        self.annotation_layer = layer
+        self.annotation_layer = layer 
 
         if previous is not layer:
             layer.featureAdded.connect(
@@ -826,12 +855,22 @@ class TreeAnglePlugin:
 
         self._refresh_tree_count()
 
+        if self.history_dock is not None: 
+            self.history_dock.set_layer(layer)
+
 
     def _feature_count_changed(
         self,
         _feature_id=None,
     ) -> None:
         self._refresh_tree_count()
+        self._refresh_tree_history()
+    
+    def _feature_values_changed(
+            self, 
+            *_args, 
+            ) -> None: 
+        self._refresh_tree_history()
 
 
     def _annotation_feature_deleted(
@@ -839,7 +878,7 @@ class TreeAnglePlugin:
         _feature_id=None,
     ) -> None:
         self._refresh_tree_count()
-
+        self._refresh_tree_history()
         layer = self.annotation_layer
         vector_layer = self.fall_vector_layer
 
@@ -878,4 +917,11 @@ class TreeAnglePlugin:
 
         self.tree_count_label.setText(
             f"(trees: {count})"
-        )
+        ) 
+
+    def _refresh_tree_history(
+        self,
+        *_unused,
+    ) -> None:
+        if self.history_dock is not None:
+            self.history_dock.refresh()

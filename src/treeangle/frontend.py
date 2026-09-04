@@ -27,15 +27,19 @@ from qgis.gui import (
 
 
 from qgis.PyQt.QtWidgets import (
+        QAbstractItemView, 
         QComboBox,
         QDialog,
         QDialogButtonBox,
+        QDockWidget,
         QDoubleSpinBox,
         QFormLayout,
         QGroupBox,
         QLineEdit,
         QMessageBox,
         QPlainTextEdit,
+        QTableWidget,
+        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
 )
@@ -74,7 +78,8 @@ from .geometry import measure
 __all__ = [
         "FormDialog", 
         "CaptureTool", 
-        "EditTool"
+        "EditTool",
+        "TreeDock"
         ]
 
 ANNOTATOR_KEY = "treeangle/annotator"
@@ -424,6 +429,158 @@ def _spin_value(spin: QDoubleSpinBox) -> float | None:
 
 
 
+def _histext(value: object) -> str:
+    """ convert qgis attribute into displayable text"""
+
+    if value is None: 
+        return ""
+
+    text = str(value) 
+    if text.upper() == "NULL":
+        return ""
+
+    return text 
+
+def _metric_record(value: object) -> str: 
+    """ format a measurments to two decimals"""
+
+    try:
+        return f"{float(str(value)):.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+class TreeDock(QDockWidget): 
+    """ display measurments stored in the active annotation layer"""
+
+    def __init__(
+            self, 
+            parent: QWidget | None = None, 
+            ) -> None: 
+        super().__init__("TREE HISTORY", parent)
+
+        self.setObjectName("TreeDock")
+        self.setMinimumWidth(480)
+
+        self._layer: QgsVectorLayer | None = None 
+
+        self._table = QTableWidget(0,5,self)
+        self._table.setHorizontalHeaderLabels(
+                (
+                "tree", 
+                "height", 
+                "width", 
+                "damage class", 
+                "created"   
+                )
+            )
+
+        self._table.setAlternatingRowColors(True)
+
+        self._table.setEditTriggers(
+                QAbstractItemView.EditTrigger.NoEditTriggers    
+                )
+        self._table.setSelectionBehavior(
+                QAbstractItemView.SelectionBehavior.SelectRows  
+                )
+        self._table.verticalHeader().setVisible(False)
+        self._table.horizontalHeader().setStretchLastSection(True)
+
+        self.setWidget(self._table)
+
+    def set_layer(
+            self, 
+            layer: QgsVectorLayer | None, 
+            ) -> None: 
+        self._layer = layer 
+        self.refresh()
+    
+    def refresh(self,*_unused: object) -> None: 
+        """ rebuild table from annotation geopackage  """
+
+        layer = self._layer 
+
+        self._table.setRowCount(0)
+
+        if layer is None or not layer.isValid(): 
+            self.setWindowTitle("TREE HISTORY")
+            return 
+
+        records: list[
+                tuple[str, int, str, str, str, str]
+                ] = []
+        iterator = layer.getFeatures()
+        feature = QgsFeature()
+
+        try: 
+            while iterator.nextFeature(feature): 
+                created_at = _histext(feature.attribute("created_at"))
+                tree_id = _histext(feature.attribute("tree_id"))
+                damage_class = _histext(feature.attribute("damage_class_name"))
+                records.append(
+                        (
+                            created_at, 
+                            int(feature.id()), 
+                            tree_id, 
+                            _metric_record(feature.attribute("tree_h_m")), 
+                            _metric_record(feature.attribute("crown_w_m")),
+                            damage_class
+                            )
+                        )
+                feature = QgsFeature()
+        finally: 
+            iterator.close()
+
+        records.sort(
+                key = lambda record: (
+                    record[0], 
+                    record[1]
+                    )
+                )
+        self._table.setRowCount(len(records))
+
+        for row, record in enumerate(records): 
+            (
+                    created_at, 
+                    feature_id, 
+                    tree_id, 
+                    height, 
+                    width, 
+                    damage_class, 
+                    ) = record 
+
+            short_tree_id = (
+                    tree_id.split("-",1)[0]
+                    if tree_id 
+                    else str(feature_id)
+                    )
+
+            tree_item = QTableWidgetItem(short_tree_id)
+            tree_item.setToolTip(tree_id or f"feature {feature_id}")
+
+            tree_item.setData(
+                    Qt.ItemDataRole.UserRole, 
+                    feature_id
+                    )
+            values = (
+                    tree_item, 
+                    QTableWidgetItem(height), 
+                    QTableWidgetItem(width), 
+                    QTableWidgetItem(damage_class), 
+                    QTableWidgetItem(created_at), 
+                    )
+
+            for column, item in enumerate(values): 
+                self._table.setItem(
+                        row, 
+                        column, 
+                        item,
+                    )
+
+            self._table.resizeColumnsToContents() 
+            self.setWindowTitle(f"TREE HISTORY ({len(records)})")
+
+
+
 class CaptureTool(QgsMapTool): 
     capture_complete = pyqtSignal(object) 
     
@@ -516,7 +673,7 @@ class CaptureTool(QgsMapTool):
         cursor = e.mapPoint()
         self._render(cursor)
 
-    def keyPressEvent(self, e: QtGui.QKeyEvent | None) -> None:
+    def keyPressEvent(self, e: QKeyEvent | None) -> None:
         """ handles cancelation, point undo """
 
         if e is None: 
@@ -707,6 +864,7 @@ def _arrow_geometry(
 
 class EditTool(QgsMapTool):
     """ select and drag existing control points """
+    edit_complete = pyqtSignal()
     def __init__(
             self, 
             canvas: QgsMapCanvas, 
@@ -886,7 +1044,8 @@ class EditTool(QgsMapTool):
             self._message_callback(
                     "tree geometry and measurments updated",
                     False,
-                )
+                ) 
+            self.edit_complete.emit()
 
         finally: 
             self._finish_drag()
