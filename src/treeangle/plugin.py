@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace 
+from enum import Enum 
+from typing import TypeVar 
 
 from qgis.PyQt.QtCore import QStandardPaths, Qt
 from qgis.PyQt.QtGui import QIcon
@@ -34,11 +37,19 @@ from qgis.core import (
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
+    QgsSettings,
 )
 
 from .damage_classes import (
     DamageClass,
     DamageClassStore,
+    AttributeForm,
+    Confidence,
+    Exposure, 
+    GroundType, 
+    Health, 
+    TreeType, 
+    display_name
 )
 from .frontend import (
     CaptureTool,
@@ -61,8 +72,19 @@ from .layers import (
     source_from,
     synchronize,
     upsert_fall_vector,
-    apply_damage_class
+    apply_annotation_values
 )
+
+EnumValue = TypeVar(
+    "EnumValue",
+    bound=Enum,
+)
+
+EXPOSURE_SETTING_KEY = "treeangle/current_exposure"
+CONFIDENCE_SETTING_KEY = "treeangle/current_confidence"
+TREE_TYPE_SETTING_KEY = "treeangle/current_tree_type"
+GROUND_TYPE_SETTING_KEY = "treeangle/current_ground_type"
+HEALTH_SETTING_KEY = "treeangle/current_health"
 
 def _exec_dialog(dialog: QDialog) -> bool:
     """Run a dialog under either Qt 5 or Qt 6."""
@@ -92,6 +114,13 @@ class TreeAnglePlugin:
         self.edit_tool = None 
         self.history_dock: TreeDock | None = None 
         self._watched_annotation_layer: QgsVectorLayer | None = None 
+        self.exposure_dropdown: QComboBox | None = None
+        self.confidence_dropdown: QComboBox | None = None
+        self.tree_type_dropdown: QComboBox | None = None
+        self.ground_type_dropdown: QComboBox | None = None
+        self.health_dropdown: QComboBox | None = None
+
+        self.apply_fields_action: QAction | None = None
         #actions 
         self.create_action: QAction | None = None 
         self.create_class_action: QAction | None = None 
@@ -123,8 +152,11 @@ class TreeAnglePlugin:
         self.initAnnotator() 
         # open editer to change existing points 
         self.initEditor() 
-        #=============================================#
+        # open editor to select kites 
         self.initSelector() 
+        #
+        self.initAnnotationFields()
+        #=============================================#
 
         self.tree_count_label = QLabel(
             "[0]",
@@ -154,6 +186,62 @@ class TreeAnglePlugin:
         self.toolbar.addAction(history_action)
         self.history_dock.show()
     
+    def initAnnotationFields(self) -> None: 
+        """ceate optional batch/capture attribute dropdowns."""
+
+        self.exposure_dropdown = (
+            self._add_optional_enum_dropdown(
+                "exposure:",
+                Exposure,
+                EXPOSURE_SETTING_KEY,
+            )
+        )
+
+        self.confidence_dropdown = (
+            self._add_optional_enum_dropdown(
+                "confidence:",
+                Confidence,
+                CONFIDENCE_SETTING_KEY,
+            )
+        )
+
+        self.tree_type_dropdown = (
+            self._add_optional_enum_dropdown(
+                "tree:",
+                TreeType,
+                TREE_TYPE_SETTING_KEY,
+            )
+        )
+
+        self.ground_type_dropdown = (
+            self._add_optional_enum_dropdown(
+                "ground:",
+                GroundType,
+                GROUND_TYPE_SETTING_KEY,
+            )
+        )
+
+        self.health_dropdown = (
+            self._add_optional_enum_dropdown(
+                "health:",
+                Health,
+                HEALTH_SETTING_KEY,
+            )
+        )
+
+        # applies physical class plus selected optional fields.
+        self.apply_class_action = self._create_action(
+            "APPLY_CLASS",
+            self.apply_active_class_to_selection,
+        )
+
+        # applies only optional fields, preserving damage class.
+        self.apply_fields_action = self._create_action(
+            "APPLY_FIELDS",
+            self.apply_fields_to_selection,
+        )
+
+
     def initSelector(self) -> None: 
         native_select = self.iface.actionSelect()
 
@@ -200,10 +288,6 @@ class TreeAnglePlugin:
         self.delete_class_action = self._create_action(
                 "DELETE_CLASS", 
                 self.delete_damage_class
-                )
-        self.apply_class_action = self._create_action(
-                "APPLY_CLASS|", 
-                self.apply_active_class_to_selection,
                 )
 
     def initEditor(self) -> None: 
@@ -389,7 +473,7 @@ class TreeAnglePlugin:
                 " then choose a damage class and click APPLY CLASS"
                 )
     def apply_active_class_to_selection(self, _checked: bool = False) -> None: 
-        """ apply the active damage class to every selected kite """
+        """ apply the class and selected optional values """
 
         layer = self._current_annotation_layer()
         damage_class = self.damage_store.active_class 
@@ -411,12 +495,34 @@ class TreeAnglePlugin:
             self._message("select one or more kites first.", error=True)
             return 
         try: 
-            vector_layer = self._ensure_fall_vector_layer(layer)
-            changed = apply_damage_class(
+            changed = apply_annotation_values(
                     layer, 
                     feature_ids, 
                     damage_class, 
-                    )
+                    exposure=self._selected_enum(
+                        self.exposure_dropdown, 
+                        Exposure
+                        ), 
+                    confidence=self._selected_enum(
+                        self.confidence_dropdown, 
+                        Confidence,
+                        ),
+                    tree_type=self._selected_enum(
+                        self.tree_type_dropdown, 
+                        TreeType
+                        ), 
+                    ground_type=self._selected_enum(
+                        self.ground_type_dropdown, 
+                        GroundType
+                        ), 
+                    health = self._selected_enum(
+                        self.health_dropdown, 
+                        Health
+                        ),
+                    ) 
+
+            vector_layer = self._ensure_fall_vector_layer(layer)
+
             synchronize(layer, vector_layer) 
         except (ValueError, RuntimeError) as error: 
             self._message(str(error), error=True)
@@ -584,6 +690,93 @@ class TreeAnglePlugin:
         self.iface.setActiveLayer(layer)
             
         return layer 
+    
+    def apply_fields_to_selection(
+            self, 
+            _checked: bool = False, 
+            ) -> None: 
+
+        """ update optional fields without changing damage classes"""
+
+        layer = self._current_annotation_layer()
+
+        if layer is None: 
+            self._message(
+                    "select a kite layer first", 
+                    error=True
+                    )
+            return 
+
+        feature_ids = [
+                int(feature_ids)
+                for feature_id in layer.selectedFeatureIds()
+                ]
+        if not feature_ids: 
+            self._message(
+                    "select one or more kites first", 
+                    error=True
+                    )
+
+        exposure = self._selected_enum(
+            self.exposure_dropdown,
+            Exposure,
+        )
+        confidence = self._selected_enum(
+            self.confidence_dropdown,
+            Confidence,
+        )
+        tree_type = self._selected_enum(
+            self.tree_type_dropdown,
+            TreeType,
+        )
+        ground_type = self._selected_enum(
+            self.ground_type_dropdown,
+            GroundType,
+        )
+        health = self._selected_enum(
+            self.health_dropdown,
+            Health,
+        )
+
+        if all(
+            value is None
+            for value in (
+                exposure,
+                confidence,
+                tree_type,
+                ground_type,
+                health,
+            )
+        ):
+            self._message(
+                    "every field is set to 'KEEP': nothing to apply", 
+                    error=True
+                    )
+            return 
+
+        try:
+            changed = apply_annotation_values(
+                    layer,
+                    feature_ids,
+                    exposure=exposure,
+                    confidence=confidence,
+                    tree_type=tree_type,
+                    ground_type=ground_type,
+                    health=health,
+                )
+        except (ValueError, RuntimeError) as error:
+                self._message(
+                    str(error),
+                    error=True,
+                )
+                return
+
+        layer.selectByIds(feature_ids)
+        self._refresh_tree_history()
+
+        self._message(
+                f"updated fields on {changed} selected tree(s)"
+                )
 
     def activate_capture(
         self,
@@ -722,7 +915,8 @@ class TreeAnglePlugin:
     
     def _finish_capture(self, map_points) -> None: 
         layer = self.annotation_layer 
-        active_class = self.damage_store.active_class 
+        active_class = self._class_for_capture() 
+
         if layer is None or not is_kite(layer): 
             self._message("layer no longer available.", error=True)
             return 
@@ -1003,3 +1197,155 @@ class TreeAnglePlugin:
     ) -> None:
         if self.history_dock is not None:
             self.history_dock.refresh()
+
+    def _add_optional_enum_dropdown(
+        self,
+        label_text: str,
+        enum_type: type[EnumValue],
+        setting_key: str,
+    ) -> QComboBox:
+        """add a toolbar dropdown whose KEEP value means no update."""
+
+        if self.toolbar is None:
+            raise RuntimeError(
+                "TreeAngle toolbar has not been created."
+            )
+
+        label = QLabel(
+            label_text,
+            self.toolbar,
+        )
+        label.setContentsMargins(6, 0, 2, 0)
+        self.toolbar.addWidget(label)
+
+        dropdown = QComboBox(self.toolbar)
+
+        dropdown.addItem(
+            "KEEP",
+            None,
+        )
+
+        for value in enum_type:
+            dropdown.addItem(
+                display_name(value),
+                value,
+            )
+
+        dropdown.setToolTip(
+            "for existing kites, KEEP preserves the field. "
+            "for new kites, KEEP stores 'null'."
+        )
+
+        saved_text = str(
+            QgsSettings().value(
+                setting_key,
+                "",
+            )
+            or ""
+        )
+
+        if saved_text:
+            try:
+                saved_value = enum_type(saved_text)
+            except ValueError:
+                saved_value = None
+
+            if saved_value is not None:
+                index = dropdown.findData(saved_value)
+
+                if index >= 0:
+                    dropdown.setCurrentIndex(index)
+
+        dropdown.currentIndexChanged.connect(
+            lambda _index, box=dropdown, key=setting_key:
+            self._save_optional_dropdown(box, key)
+        )
+
+        self.toolbar.addWidget(dropdown)
+        return dropdown
+
+
+    @staticmethod
+    def _save_optional_dropdown(
+        dropdown: QComboBox,
+        setting_key: str,
+    ) -> None:
+        value = dropdown.currentData()
+
+        stored_value = (
+            value.value
+            if isinstance(value, Enum)
+            else ""
+        )
+
+        QgsSettings().setValue(
+            setting_key,
+            stored_value,
+        )
+
+
+    @staticmethod
+    def _selected_enum(
+        dropdown: QComboBox | None,
+        enum_type: type[EnumValue],
+    ) -> EnumValue | None:
+        if dropdown is None:
+            return None
+
+        value = dropdown.currentData()
+
+        if isinstance(value, enum_type):
+            return value
+
+        return None  
+
+    def _class_for_capture(self) -> DamageClass | None:
+        """create a temporary class snapshot for one new kite """
+
+        active = self.damage_store.active_class
+
+        if active is None:
+            return None
+
+        class_attributes = active.attributes
+
+        exposure = self._selected_enum(
+            self.exposure_dropdown,
+            Exposure,
+        )
+        confidence = self._selected_enum(
+            self.confidence_dropdown,
+            Confidence,
+        )
+        tree_type = self._selected_enum(
+            self.tree_type_dropdown,
+            TreeType,
+        )
+        ground_type = self._selected_enum(
+            self.ground_type_dropdown,
+            GroundType,
+        )
+        health = self._selected_enum(
+            self.health_dropdown,
+            Health,
+        )
+
+        capture_attributes = AttributeForm(
+            annotator=class_attributes.annotator,
+            failure_mode=class_attributes.failure_mode,
+            branch_loss=class_attributes.branch_loss,
+            intactness=class_attributes.intactness,
+            notes=class_attributes.notes,
+
+            # KEEP becomes UNKNOWN for a brand-new feature.
+            exposure=exposure or Exposure.UNKNOWN,
+            confidence=confidence or Confidence.UNKNOWN,
+            tree_type=tree_type or TreeType.UNKNOWN,
+            ground_type=ground_type or GroundType.UNKNOWN,
+            health_of_tree=health or Health.UNKNOWN,
+        )
+
+        return replace(
+            active,
+            attributes=capture_attributes,
+        )

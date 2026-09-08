@@ -342,16 +342,8 @@ class FormDialog(QDialog):
         attributes = AttributeForm(
             annotator=self.annotator.text().strip(),
             branch_loss=self.branch_loss.currentData(),
-            confidence=self.confidence.currentData(),
-            exposure=self.exposure.currentData(),
             failure_mode=self.failure_mode.currentData(),
-            ground_type=self.ground_type.currentData(),
-            health_of_tree=self.health.currentData(),
             intactness=self.crown_intactness.currentData(),
-            root_plate_visible=(
-                self.root_plate_visible.currentData()
-            ),
-            tree_type=self.tree_type.currentData(),
             notes=self.notes.toPlainText().strip(),
         )
 

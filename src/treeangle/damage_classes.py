@@ -37,6 +37,7 @@ class Confidence(StringEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    UNKNOWN = "null"
 
 
 def display_name(value: Enum) -> str: 
@@ -60,6 +61,7 @@ class Exposure(StringEnum):
     CLEAR = "clear"
     PARTIAL = "partial" 
     LOW = "low"
+    UNKNOWN = "null"
 
 class FailureMode(StringEnum):
     """ how did the trunk fail? """
@@ -74,7 +76,7 @@ class FailureMode(StringEnum):
 
 class GroundType(StringEnum):
     """ what kind of ground, best guess """
-    UNKNOWN = "unknown"
+    UNKNOWN = "null"
     DIRT = "dirt"
     GRASS = "grass"
     CROPS = "crops"
@@ -83,7 +85,7 @@ class GroundType(StringEnum):
 
 class Health(StringEnum):
     """ how healthy does the tree look """
-    UNKNOWN = "unknown"
+    UNKNOWN = "null"
     HEALTHY = "healthy"
     FAIR = "fair"
     UNHEALTHY = "unhealthy"
@@ -108,17 +110,17 @@ class TreeType(StringEnum):
     CONIFER = "conifer"
     DECIDUOUS = "deciduous"
     SHRUB = "shrub"
-    UNKNOWN = "unknown"
+    UNKNOWN = "null"
 
 @dataclass(frozen=True, slots=True)
 class AttributeForm:
     annotator: str = ""
-    branch_loss: BranchLoss = BranchLoss.NONE 
-    confidence: Confidence = Confidence.MEDIUM 
-    exposure: Exposure = Exposure.CLEAR
+    branch_loss: BranchLoss = BranchLoss.UNKNOWN 
+    confidence: Confidence = Confidence.UNKNOWN
+    exposure: Exposure = Exposure.UNKNOWN
     failure_mode: FailureMode = FailureMode.UNKNOWN 
     ground_type: GroundType = GroundType.UNKNOWN 
-    health_of_tree: Health = Health.FAIR 
+    health_of_tree: Health = Health.UNKNOWN 
     intactness: Intactness = Intactness.UNKNOWN  
     notes: str = ""
     root_plate_visible: Ternary = Ternary.UNKNOWN
@@ -135,19 +137,19 @@ class AttributeForm:
             branch_loss=BranchLoss(
                 values.get(
                     "branch_loss_class",
-                    BranchLoss.NONE.value,
+                    BranchLoss.UNKNOWN.value,
                 )
             ),
             confidence=Confidence(
                 values.get(
                     "confidence",
-                    Confidence.MEDIUM.value,
+                    Confidence.UNKNOWN.value,
                 )
             ),
             exposure=Exposure(
                 values.get(
                     "exposure",
-                    Exposure.CLEAR.value,
+                    Exposure.UNKNOWN.value,
                 )
             ),
             failure_mode=FailureMode(
@@ -165,7 +167,7 @@ class AttributeForm:
             health_of_tree=Health(
                 values.get(
                     "health_of_tree",
-                    Health.FAIR.value,
+                    Health.UNKNOWN.value,
                 )
             ),
             intactness=Intactness(
@@ -192,7 +194,8 @@ class AttributeForm:
             ),
         ) 
 
-    def as_storage_dict(self) -> dict[str, object]:
+    def as_storage_dict(self) -> dict[str, object]: 
+        """ creates new complete annotation """
         return {
             "annotator": self.annotator,
             "branch_loss_class": self.branch_loss.value,
@@ -205,7 +208,16 @@ class AttributeForm:
             "root_plate_visible": self.root_plate_visible.value,
             "tree_type": self.tree_type.value,
             "notes": self.notes,
-        }
+        } 
+
+    def as_damage_class_storage_dict(self) -> dict[str, object]:
+        """ fields which define reusable physical damage class"""
+        # changes damage-class fields on an existing annotation
+        return {
+                "failure_mode": self.failure_mode.value, 
+                "branch_loss_class": self.branch_loss.value, 
+                "crown_intactness": self.intactness.value, 
+                }
 
 @dataclass(frozen=True, slots=True)
 class DamageClass:

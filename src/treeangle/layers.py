@@ -34,7 +34,14 @@ from qgis.core import (
         )
 
 from .geometry import KiteMetrics 
-from .damage_classes import DamageClass
+from .damage_classes import (
+        Confidence,
+        GroundType,
+        DamageClass, 
+        Exposure, 
+        Health, 
+        TreeType
+        )
 
 
 LayerSpecies = Literal["fallvec", "annkite"]
@@ -519,6 +526,90 @@ def open_fall_vectors(
 
     _configure_fall_vector_layer(layer)
     return layer
+
+
+def apply_annotation_values(
+        layer: QgsVectorLayer, 
+        feature_ids: list[int], 
+        damage_class: DamageClass | None = None, 
+        *, 
+        exposure: Exposure | None = None, 
+        confidence: Confidence | None = None, 
+        tree_type: TreeType | None = None, 
+        ground_type: GroundType | None = None, 
+        health: Health | None = None 
+        ) -> int: 
+
+    """ apply the selected values to a batch of kites 
+
+        None means a field should remained unchanged 
+    """
+
+    if not is_kite(layer): 
+        raise ValueError(
+                "the selected layer is not a treeangle kite layer"
+                )
+
+    if not feature_ids: 
+        return 0
+
+    values: dict[str, object] = {}
+
+    if damage_class is not None: 
+        values.update(
+                damage_class.attributes
+                .as_damage_class_storage_dict()
+                )
+
+        values.update(
+                {
+                    "damage_class_id": damage_class.class_id, 
+                    "damage_class_name": damage_class.name
+                    }
+                )
+
+    if exposure is not None:
+        values["exposure"] = exposure.value
+
+    if confidence is not None:
+        values["confidence"] = confidence.value
+
+    if tree_type is not None:
+        values["tree_type"] = tree_type.value
+
+    if ground_type is not None:
+        values["ground_type"] = ground_type.value
+
+    if health is not None:
+        values["health_of_tree"] = health.value
+
+    if not values:
+        return 0
+
+    values["updated_at"] = _utc_now()
+
+    fields = layer.fields() 
+
+    indexed_values = {
+            fields.indexOf(name): value
+            for name, value in values.items()
+            if fields.indexOf(name) >= 0
+        }
+
+    changes = {
+            feature_id: dict(indexed_values)
+            for feature_id in feature_ids
+        }
+    
+    if not data_provider(layer).changeAttributeValues(
+            changes 
+            ): 
+        raise RuntimeError(
+                " the geopackage could not update the "
+                "selected annotation fields"
+                ) 
+    layer.triggerRepaint()
+    return len(feature_ids)
 
 def apply_damage_class(
         layer: QgsVectorLayer, 
