@@ -520,6 +520,57 @@ def open_fall_vectors(
     _configure_fall_vector_layer(layer)
     return layer
 
+def apply_damage_class(
+        layer: QgsVectorLayer, 
+        feature_ids: list[int], 
+        damage_class: DamageClass, 
+        ) -> int: 
+    if not is_kite(layer): 
+        raise ValueError(
+                "the selected layer is not a TreeAngle kite"
+                )
+
+    if not feature_ids: 
+        return 0 
+
+    if layer.isEditable(): 
+        raise RuntimeError(
+                "save or discard the layer's current edits "
+                "before applying a class"
+                )
+
+    values = damage_class.attributes.as_storage_dict()
+    
+    #preserves origiunal kite drawer    
+    values.pop("annotator", None)
+
+    values.update(
+            {
+                "damage_class_id": damage_class.class_id, 
+                "damage_class_name": damage_class.name, 
+                "updated_at": _utc_now(),
+                }
+            )
+
+    fields = layer.fields()
+    
+    indexed_values = {
+            fields.indexOf(name): value 
+            for name, value in values.items()
+            if fields.indexOf(name) >= 0
+            }
+
+    changes = {
+            feature_id: dict(indexed_values)
+            for feature_id in feature_ids
+            }
+    if not data_provider(layer).changeAttributeValues(changes): 
+        raise RuntimeError(
+                "the geopackage could not update the selected damage classes"
+                )
+
+    layer.triggerRepaint()
+    return len(feature_ids)
 
 def _configure_fall_vector_layer(layer: QgsVectorLayer) -> None: 
         layer.setCustomProperty("treeangle/schema_version", SCHEMA_VERSION)

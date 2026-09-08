@@ -61,6 +61,7 @@ from .layers import (
     source_from,
     synchronize,
     upsert_fall_vector,
+    apply_damage_class
 )
 
 def _exec_dialog(dialog: QDialog) -> bool:
@@ -96,6 +97,7 @@ class TreeAnglePlugin:
         self.create_class_action: QAction | None = None 
         self.capture_action: QAction | None = None
         self.edit_action: QAction | None = None 
+        self.apply_class_action: QAction | None = None 
         
         self.edit_class_action = None 
         self.delete_class_action = None 
@@ -147,7 +149,6 @@ class TreeAnglePlugin:
 
         history_action = self.history_dock.toggleViewAction()
         history_action.setText("HISTORY")
-
         self.toolbar.addAction(history_action)
         self.history_dock.show()
 
@@ -190,6 +191,10 @@ class TreeAnglePlugin:
         self.delete_class_action = self._create_action(
                 "DELETE CLASS", 
                 self.delete_damage_class
+                )
+        self.apply_class_action = self._create_action(
+                "APPLY CLASS", 
+                self.apply_active_class_to_selection,
                 )
 
     def initEditor(self) -> None: 
@@ -351,6 +356,47 @@ class TreeAnglePlugin:
                 )
         return edited_class 
     
+    def apply_active_class_to_selection(self, _checked: bool = False) -> None: 
+        """ apply the active damage class to every selected kite """
+
+        layer = self._current_annotation_layer()
+        damage_class = self.damage_store.active_class 
+        
+        if layer is None: 
+            self._message("select a kite annotation layer first", error=True)
+            return 
+
+        if damage_class is None: 
+            self._message("choose a damage class first", error=True)
+            return 
+
+        feature_ids = [
+                int(feature_id)
+                for feature_id in layer.selectedFeatureIds()
+                ] 
+
+        if not feature_ids: 
+            self._message("select one or more kites first.", error=True)
+            return 
+        try: 
+            vector_layer = self._ensure_fall_vector_layer(layer)
+            changed = apply_damage_class(
+                    layer, 
+                    feature_ids, 
+                    damage_class, 
+                    )
+            synchronize(layer, vector_layer) 
+        except (ValueError, RuntimeError) as error: 
+            self._message(str(error), error=True)
+            return 
+
+        layer.selectByIds(feature_ids)
+        self._refresh_tree_history()
+        self._message(
+                f"applied '{damage_class.name}` to {changed} selected tree(s)"
+                )
+        
+
     def delete_damage_class(
             self, 
             _checked: bool = False
