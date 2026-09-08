@@ -153,7 +153,6 @@ def _ann_kite_fields() -> QgsFields:
             QgsField("source_crs", QVariant.String, len=64),
             QgsField("mosaic_id", QVariant.String, len=128),
             QgsField("bundle_id", QVariant.String, len=128),
-            QgsField("tile_id", QVariant.String, len=128),
         )
     for field in definitions:
         fields.append(field)
