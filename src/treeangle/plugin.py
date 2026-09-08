@@ -124,9 +124,10 @@ class TreeAnglePlugin:
         # open editer to change existing points 
         self.initEditor() 
         #=============================================#
-        
+        self.initSelector() 
+
         self.tree_count_label = QLabel(
-            "trees: 0",
+            "[0]",
             self.toolbar,
         )
         self.tree_count_label.setContentsMargins(
@@ -149,7 +150,7 @@ class TreeAnglePlugin:
         )
 
         history_action = self.history_dock.toggleViewAction()
-        history_action.setText("HISTORY")
+        history_action.setText("[history]")
         self.toolbar.addAction(history_action)
         self.history_dock.show()
     
@@ -157,34 +158,34 @@ class TreeAnglePlugin:
         native_select = self.iface.actionSelect()
 
         self.select_action = self._create_action(
-                "SELECT KITES", 
+                "|SELECT_KITES|", 
                 self.activate_selection, 
                 )
     def initAnnotator(self) -> None: 
         self.capture_action = self._create_action(
-                "ANNOTATE", 
+                "|ANNOTATE|", 
                 self.activate_capture, 
                 checkable=True
                 )
     def initGPKGCreation(self) -> None: 
         self.create_action = self._create_action(
-                "OPEN GPKG", 
+                "|OPEN_GPKG|", 
                 self.create_annotation_layer
                 )
     def initDamageClasses(self) -> None: 
-        self.create_class_action = self._create_action(
-                "DAMAGE CLASS", 
-                self.create_damage_class 
-                ) 
+
         if self.toolbar is None: 
             return 
-        class_label = QLabel("damage_class:")
-        class_label.setContentsMargins(3,0,2,0)
-        self.toolbar.addWidget(class_label)
+
+        self.create_class_action = self._create_action(
+                "| CREATE_CLASS", 
+                self.create_damage_class 
+                ) 
         self.damage_dropdown = QComboBox(self.toolbar)
         self.damage_dropdown.setMinimumContentsLength(18)
         self.damage_dropdown.setToolTip(
-                "damage class values copied to each new tree_kite"
+                "the name of the damage class and "
+                "the values copied to each new annotated treekite"
                 )
         self.damage_dropdown.currentIndexChanged.connect(
                 self._damage_class_selected
@@ -193,21 +194,21 @@ class TreeAnglePlugin:
         self._refresh_damage_dropdown() 
 
         self.edit_class_action = self._create_action(
-                "EDIT CLASS", 
+                "EDIT_CLASS", 
                 self.edit_damage_class,
                 ) 
         self.delete_class_action = self._create_action(
-                "DELETE CLASS", 
+                "DELETE_CLASS", 
                 self.delete_damage_class
                 )
         self.apply_class_action = self._create_action(
-                "APPLY CLASS", 
+                "APPLY_CLASS|", 
                 self.apply_active_class_to_selection,
                 )
 
     def initEditor(self) -> None: 
         self.edit_action = self._create_action(
-                "EDIT POINTS", 
+                "|EDIT_POINTS|", 
                 self.activate_edit, 
                 checkable=True 
                 )  
