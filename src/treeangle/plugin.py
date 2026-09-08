@@ -105,6 +105,7 @@ class TreeAnglePlugin:
         self._watched_annotation_layer = None
         self.canvas = iface.mapCanvas()
         self.toolbar = None 
+        self.attribute_toolbar = None 
         self.actions: list[QAction] = [] 
         # layers 
         self.annotation_layer = None 
@@ -140,6 +141,13 @@ class TreeAnglePlugin:
         # create toolbar 
         self.toolbar = self.iface.addToolBar("TreeAngle")
         self.toolbar.setObjectName("TreeAngleTools")
+        
+        self.attribute_toolbar = self.iface.addToolBar(
+                "Kite Attributes"
+                )
+        self.attribute_toolbar.setObjectName(
+                "TreeAngleAttributeTools"
+                ) 
 
         # add actions  
         #=============================================#
@@ -182,15 +190,20 @@ class TreeAnglePlugin:
         )
 
         history_action = self.history_dock.toggleViewAction()
-        history_action.setText("[history]")
+        history_action.setText("history")
         self.toolbar.addAction(history_action)
         self.history_dock.show()
     
     def initAnnotationFields(self) -> None: 
         """ceate optional batch/capture attribute dropdowns."""
+        
+        toolbar = self.attribute_toolbar
+        if toolbar is None: 
+            return 
 
         self.exposure_dropdown = (
             self._add_optional_enum_dropdown(
+                toolbar,
                 "exposure:",
                 Exposure,
                 EXPOSURE_SETTING_KEY,
@@ -198,7 +211,8 @@ class TreeAnglePlugin:
         )
 
         self.confidence_dropdown = (
-            self._add_optional_enum_dropdown(
+            self._add_optional_enum_dropdown( 
+                toolbar,
                 "confidence:",
                 Confidence,
                 CONFIDENCE_SETTING_KEY,
@@ -206,7 +220,8 @@ class TreeAnglePlugin:
         )
 
         self.tree_type_dropdown = (
-            self._add_optional_enum_dropdown(
+            self._add_optional_enum_dropdown( 
+                toolbar, 
                 "tree:",
                 TreeType,
                 TREE_TYPE_SETTING_KEY,
@@ -215,6 +230,7 @@ class TreeAnglePlugin:
 
         self.ground_type_dropdown = (
             self._add_optional_enum_dropdown(
+                toolbar,
                 "ground:",
                 GroundType,
                 GROUND_TYPE_SETTING_KEY,
@@ -223,23 +239,27 @@ class TreeAnglePlugin:
 
         self.health_dropdown = (
             self._add_optional_enum_dropdown(
+                toolbar,
                 "health:",
                 Health,
                 HEALTH_SETTING_KEY,
             )
         )
 
-        # applies physical class plus selected optional fields.
-        self.apply_class_action = self._create_action(
-            "APPLY_CLASS",
-            self.apply_active_class_to_selection,
-        )
+        self.apply_fields_action = QAction(
+                "APPLY_FIELDS", 
+                self.iface.mainWindow()
+                )
 
-        # applies only optional fields, preserving damage class.
-        self.apply_fields_action = self._create_action(
-            "APPLY_FIELDS",
-            self.apply_fields_to_selection,
-        )
+        self.apply_fields_action.triggered.connect(self.apply_fields_to_selection)
+        
+        toolbar.addAction(self.apply_fields_action)
+
+        self.iface.addPluginToVectorMenu(
+                "&TreeAngle", 
+                self.apply_fields_action
+                )
+        self.actions.append(self.apply_fields_action)
 
 
     def initSelector(self) -> None: 
@@ -270,7 +290,8 @@ class TreeAnglePlugin:
                 self.create_damage_class 
                 ) 
         self.damage_dropdown = QComboBox(self.toolbar)
-        self.damage_dropdown.setMinimumContentsLength(18)
+        self.damage_dropdown.setMinimumContentsLength(10) 
+        self.damage_dropdown.setMaximumWidth(130)
         self.damage_dropdown.setToolTip(
                 "the name of the damage class and "
                 "the values copied to each new annotated treekite"
@@ -286,7 +307,7 @@ class TreeAnglePlugin:
                 self.edit_damage_class,
                 ) 
         self.delete_class_action = self._create_action(
-                "DELETE_CLASS", 
+                "DELETE_CLASS|", 
                 self.delete_damage_class
                 )
 
@@ -322,12 +343,19 @@ class TreeAnglePlugin:
             self.iface.removePluginVectorMenu("&TreeAngle", action)
             if self.toolbar: 
                 self.toolbar.removeAction(action)
-
-        if self.toolbar: 
+            if self.attribute_toolbar is not None: 
+                self.attribute_toolbar.removeAction(action)
+        
+        if self.toolbar is not None: 
             self.iface.mainWindow().removeToolBar(self.toolbar)
             self.toolbar.deleteLater() 
             self.toolbar = None 
 
+        if self.attribute_toolbar is not None:
+            self.iface.mainWindow().removeToolBar(self.attribute_toolbar)
+            self.attribute_toolbar.deleteLater()
+            self.attribute_toolbar = None 
+        
         if self.history_dock is not None:
             self.iface.removeDockWidget(
                 self.history_dock
@@ -335,7 +363,8 @@ class TreeAnglePlugin:
 
             self.history_dock.deleteLater()
             self.history_dock = None
-            self.actions.clear()
+        
+        self.actions.clear()
 
         watched = self._watched_annotation_layer
 
@@ -1200,25 +1229,23 @@ class TreeAnglePlugin:
 
     def _add_optional_enum_dropdown(
         self,
+        target_toolbar,
         label_text: str,
         enum_type: type[EnumValue],
         setting_key: str,
     ) -> QComboBox:
         """add a toolbar dropdown whose KEEP value means no update."""
 
-        if self.toolbar is None:
-            raise RuntimeError(
-                "TreeAngle toolbar has not been created."
-            )
-
         label = QLabel(
             label_text,
-            self.toolbar,
+            target_toolbar,
         )
-        label.setContentsMargins(6, 0, 2, 0)
-        self.toolbar.addWidget(label)
+        label.setContentsMargins(5, 0, 1, 0)
+        target_toolbar.addWidget(label)
 
         dropdown = QComboBox(self.toolbar)
+        dropdown.setMinimumWidth(70)
+        dropdown.setMaximumWidth(105)
 
         dropdown.addItem(
             "KEEP",
@@ -1261,7 +1288,7 @@ class TreeAnglePlugin:
             self._save_optional_dropdown(box, key)
         )
 
-        self.toolbar.addWidget(dropdown)
+        target_toolbar.addWidget(dropdown)
         return dropdown
 
 

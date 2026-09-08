@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from typing import Literal 
 from datetime import datetime, timezone 
 from uuid import uuid4
+from functools import lru_cache 
 
-from qgis.PyQt.QtCore import QVariant 
+from qgis.PyQt.QtCore import QMetaType 
 from qgis.core import (
         Qgis, 
         QgsArrowSymbolLayer, 
@@ -45,6 +46,11 @@ from .damage_classes import (
 
 
 LayerSpecies = Literal["fallvec", "annkite"]
+
+
+
+STRING_FIELD = QMetaType.Type.QString 
+DOUBLE_FIELD = QMetaType.Type.Double 
 
 SCHEMA_VERSION = "2.0"
 DEFAULT_LAYER_NAME = "kites"
@@ -90,7 +96,7 @@ KITE = {
         }
 
 
-def field_names(layer: LayerSpecies) -> set[str]:
+def field_names(layer: LayerSpecies) -> frozenset[str]:
     if layer == "fallvec":
         fields = _fall_vector_fields()
     elif layer == "annkite":
@@ -98,10 +104,10 @@ def field_names(layer: LayerSpecies) -> set[str]:
     else:
         raise ValueError(f"Unknown layer species: {layer}")
 
-    return {
+    return frozenset(
         field.name()
         for field in fields.toList()
-    }
+        )
 #======================================================================================#
 # ANNOTATION LAYER 
 #======================================================================================#
@@ -116,43 +122,43 @@ class RasterSource:
 def _ann_kite_fields() -> QgsFields: 
     fields = QgsFields()
     definitions = (
-            QgsField("tree_id", QVariant.String, len=36),
-            QgsField("schema_version", QVariant.String, len=12),
-            QgsField("p0_x", QVariant.Double),
-            QgsField("p0_y", QVariant.Double),
-            QgsField("p1_x", QVariant.Double),
-            QgsField("p1_y", QVariant.Double),
-            QgsField("p2_x", QVariant.Double),
-            QgsField("p2_y", QVariant.Double),
-            QgsField("p3_x", QVariant.Double),
-            QgsField("p3_y", QVariant.Double),
-            QgsField("tree_h_m", QVariant.Double),
-            QgsField("crown_w_m", QVariant.Double),
-            QgsField("fall_az", QVariant.Double),
-            QgsField("fall_dir", QVariant.String, len=4),
-            QgsField("wind_from", QVariant.Double),
-            QgsField("kite_area", QVariant.Double),
-            QgsField("damage_class_id", QVariant.String, len=36),
-            QgsField("damage_class_name", QVariant.String, len=100),
-            QgsField("failure_mode", QVariant.String, len=32),
-            QgsField("branch_loss_class", QVariant.String, len=24),
-            QgsField("root_plate_visible", QVariant.String, len=8),
-            QgsField("crown_intactness", QVariant.String, len=24),
-            QgsField("exposure", QVariant.String, len=12),
-            QgsField("ground_type", QVariant.String, len=16),
-            QgsField("health_of_tree", QVariant.String, len=16),
-            QgsField("tree_type", QVariant.String, len=16),
-            QgsField("confidence", QVariant.String, len=12),
-            QgsField("notes", QVariant.String),
-            QgsField("annotator", QVariant.String, len=100),
+            QgsField("tree_id", STRING_FIELD, len=36),
+            QgsField("schema_version", STRING_FIELD, len=12),
+            QgsField("p0_x", DOUBLE_FIELD),
+            QgsField("p0_y", DOUBLE_FIELD),
+            QgsField("p1_x", DOUBLE_FIELD),
+            QgsField("p1_y", DOUBLE_FIELD),
+            QgsField("p2_x", DOUBLE_FIELD),
+            QgsField("p2_y", DOUBLE_FIELD),
+            QgsField("p3_x", DOUBLE_FIELD),
+            QgsField("p3_y", DOUBLE_FIELD),
+            QgsField("tree_h_m", DOUBLE_FIELD),
+            QgsField("crown_w_m", DOUBLE_FIELD),
+            QgsField("fall_az", DOUBLE_FIELD),
+            QgsField("fall_dir", STRING_FIELD, len=4),
+            QgsField("wind_from", DOUBLE_FIELD),
+            QgsField("kite_area", DOUBLE_FIELD),
+            QgsField("damage_class_id", STRING_FIELD, len=36),
+            QgsField("damage_class_name", STRING_FIELD, len=100),
+            QgsField("failure_mode", STRING_FIELD, len=32),
+            QgsField("branch_loss_class", STRING_FIELD, len=24),
+            QgsField("root_plate_visible", STRING_FIELD, len=8),
+            QgsField("crown_intactness", STRING_FIELD, len=24),
+            QgsField("exposure", STRING_FIELD, len=12),
+            QgsField("ground_type", STRING_FIELD, len=16),
+            QgsField("health_of_tree", STRING_FIELD, len=16),
+            QgsField("tree_type", STRING_FIELD, len=16),
+            QgsField("confidence", STRING_FIELD, len=12),
+            QgsField("notes", STRING_FIELD),
+            QgsField("annotator", STRING_FIELD, len=100),
 
-            QgsField("created_at", QVariant.String, len=32),
-            QgsField("updated_at", QVariant.String, len=32),
-            QgsField("source_name", QVariant.String),
-            QgsField("source_uri", QVariant.String),
-            QgsField("source_crs", QVariant.String, len=64),
-            QgsField("mosaic_id", QVariant.String, len=128),
-            QgsField("bundle_id", QVariant.String, len=128),
+            QgsField("created_at", STRING_FIELD, len=32),
+            QgsField("updated_at", STRING_FIELD, len=32),
+            QgsField("source_name", STRING_FIELD),
+            QgsField("source_uri", STRING_FIELD),
+            QgsField("source_crs", STRING_FIELD, len=64),
+            QgsField("mosaic_id", STRING_FIELD, len=128),
+            QgsField("bundle_id", STRING_FIELD, len=128),
         )
     for field in definitions:
         fields.append(field)
@@ -435,22 +441,22 @@ def fall_vector_path(annotation: str | Path | QgsVectorLayer) -> Path:
 def _fall_vector_fields() -> QgsFields: 
     fields = QgsFields()
     definitions = (
-            QgsField("tree_id", QVariant.String, len=36),
-            QgsField("schema_version", QVariant.String, len=12),
-            QgsField("tree_h_m", QVariant.Double),
-            QgsField("fall_az", QVariant.Double),
-            QgsField("fall_dir", QVariant.String, len=4),
-            QgsField("wind_from", QVariant.Double),
-            QgsField("damage_class_id", QVariant.String, len=36),
-            QgsField("damage_class_name", QVariant.String, len=100),
-            QgsField("created_at", QVariant.String, len=32),
-            QgsField("updated_at", QVariant.String, len=32),
-            QgsField("source_name", QVariant.String),
-            QgsField("source_uri", QVariant.String),
-            QgsField("source_crs", QVariant.String, len=64),
-            QgsField("mosaic_id", QVariant.String, len=128),
-            QgsField("bundle_id", QVariant.String, len=128),
-            QgsField("tile_id", QVariant.String, len=128),
+            QgsField("tree_id", STRING_FIELD, len=36),
+            QgsField("schema_version", STRING_FIELD, len=12),
+            QgsField("tree_h_m", DOUBLE_FIELD),
+            QgsField("fall_az", DOUBLE_FIELD),
+            QgsField("fall_dir", STRING_FIELD, len=4),
+            QgsField("wind_from", DOUBLE_FIELD),
+            QgsField("damage_class_id", STRING_FIELD, len=36),
+            QgsField("damage_class_name", STRING_FIELD, len=100),
+            QgsField("created_at", STRING_FIELD, len=32),
+            QgsField("updated_at", STRING_FIELD, len=32),
+            QgsField("source_name", STRING_FIELD),
+            QgsField("source_uri", STRING_FIELD),
+            QgsField("source_crs", STRING_FIELD, len=64),
+            QgsField("mosaic_id", STRING_FIELD, len=128),
+            QgsField("bundle_id", STRING_FIELD, len=128),
+            QgsField("tile_id", STRING_FIELD, len=128),
             )
 
     for field in definitions: 
