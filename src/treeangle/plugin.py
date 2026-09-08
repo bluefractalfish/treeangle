@@ -98,6 +98,7 @@ class TreeAnglePlugin:
         self.capture_action: QAction | None = None
         self.edit_action: QAction | None = None 
         self.apply_class_action: QAction | None = None 
+        self.select_action: QAction | None = None 
         
         self.edit_class_action = None 
         self.delete_class_action = None 
@@ -151,7 +152,14 @@ class TreeAnglePlugin:
         history_action.setText("HISTORY")
         self.toolbar.addAction(history_action)
         self.history_dock.show()
+    
+    def initSelector(self) -> None: 
+        native_select = self.iface.actionSelect()
 
+        self.select_action = self._create_action(
+                "SELECT KITES", 
+                self.activate_selection, 
+                )
     def initAnnotator(self) -> None: 
         self.capture_action = self._create_action(
                 "ANNOTATE", 
@@ -351,11 +359,34 @@ class TreeAnglePlugin:
         self._refresh_damage_dropdown() 
 
         self._message(
-                f"damage class `{edited_class.name}` updated"
+                f"damage class '{edited_class.name}' updated"
                 "existing tree annotations were not changed"
                 )
         return edited_class 
     
+    def activate_selection(self, _checked: bool = False) -> None: 
+        """ activates qgis selection for the kite polygon layer """
+
+        layer = self._current_annotation_layer()
+
+        if layer is None: 
+            self._message(
+                    "open or select a TreeAngle kite layer first", error=True
+                    )
+            return 
+
+        self._set_annotation_layer(layer)
+        self.iface.setActiveLayer(layer)
+
+        self._set_checked(self.capture_action, False)
+        self._set_checked(self.edit_action, False)
+
+        # switch to QGS selection tool 
+        self.iface.actionSelect().trigger()
+        self._message(
+                "click or drag to select kites"
+                " then choose a damage class and click APPLY CLASS"
+                )
     def apply_active_class_to_selection(self, _checked: bool = False) -> None: 
         """ apply the active damage class to every selected kite """
 
@@ -393,7 +424,7 @@ class TreeAnglePlugin:
         layer.selectByIds(feature_ids)
         self._refresh_tree_history()
         self._message(
-                f"applied '{damage_class.name}` to {changed} selected tree(s)"
+                f"applied  '{damage_class.name}' to {changed} selected tree(s)"
                 )
         
 
@@ -422,7 +453,7 @@ class TreeAnglePlugin:
                 "DELETE DAMAGE CLASS "
                 )
         confirmation.setText(
-                f"delete damage class `{active.name}`?"
+                f"delete damage class '{active.name}'?"
                 )
         confirmation.setInformativeText(
                 "existing tree annotations will keep their copied "
@@ -454,7 +485,7 @@ class TreeAnglePlugin:
 
         self._refresh_damage_dropdown() 
         self._message(
-                f"damage class `{active.name}` deleted "
+                f"damage class '{active.name}' deleted "
                 "existing annotations were not changed"
                 )
         
@@ -496,7 +527,7 @@ class TreeAnglePlugin:
             return 
         active = self.damage_store.active_class 
         if active: 
-            self._message(f"damage_class: `{active.name}` is active")
+            self._message(f"damage_class: '{active.name}' is active")
 
 
     def create_annotation_layer(self, _checked: bool = False) -> QgsVectorLayer | None: 
@@ -639,7 +670,7 @@ class TreeAnglePlugin:
         )
 
         self._message(
-                f"damage_class `{class_name}` "
+                f"damage_class '{class_name}' "
                 "inscribe fallen tree in kite. "
                 )
 
@@ -739,7 +770,7 @@ class TreeAnglePlugin:
             return  
 
         layer.selectByIds([feature_id])
-        self._message(f"saved `{active_class.name}`")
+        self._message(f"saved '{active_class.name}'")
         self._refresh_tree_count()
         self._refresh_tree_history()
 
