@@ -549,6 +549,11 @@ def apply_annotation_values(
 
         None means a field should remained unchanged 
     """
+    if layer.isEditable(): 
+        raise RuntimeError(
+                "save or discard the layers current edits "
+                "before applying new fields"
+                )
 
     if not is_kite(layer): 
         raise ValueError(

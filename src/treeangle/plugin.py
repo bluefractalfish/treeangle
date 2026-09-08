@@ -307,9 +307,14 @@ class TreeAnglePlugin:
                 self.edit_damage_class,
                 ) 
         self.delete_class_action = self._create_action(
-                "DELETE_CLASS|", 
+                "DELETE_CLASS", 
                 self.delete_damage_class
                 )
+
+        self.apply_class_action = self._create_action(
+            "APPLY_CLASS|",
+            self.apply_active_class_to_selection,
+        )
 
     def initEditor(self) -> None: 
         self.edit_action = self._create_action(
@@ -737,14 +742,15 @@ class TreeAnglePlugin:
             return 
 
         feature_ids = [
-                int(feature_ids)
+                int(feature_id)
                 for feature_id in layer.selectedFeatureIds()
                 ]
         if not feature_ids: 
             self._message(
                     "select one or more kites first", 
                     error=True
-                    )
+                    ) 
+            return 
 
         exposure = self._selected_enum(
             self.exposure_dropdown,
@@ -1243,7 +1249,7 @@ class TreeAnglePlugin:
         label.setContentsMargins(5, 0, 1, 0)
         target_toolbar.addWidget(label)
 
-        dropdown = QComboBox(self.toolbar)
+        dropdown = QComboBox(target_toolbar)
         dropdown.setMinimumWidth(70)
         dropdown.setMaximumWidth(105)
 
