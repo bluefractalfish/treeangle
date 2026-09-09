@@ -179,11 +179,17 @@ class TreeAnglePlugin:
         self.toolbar.addWidget(
             self.tree_count_label
         )
-        
+       
+        # create tree history dock
         self.history_dock = TreeDock(
             self.iface.mainWindow()
         )
-
+        
+        # connect dock with click_to_reveal
+        self.history_dock.feature_clicked.connect(
+                self._select_tree_from_history
+                ) 
+        #add to iface
         self.iface.addDockWidget(
             Qt.DockWidgetArea.RightDockWidgetArea,
             self.history_dock,
@@ -1382,3 +1388,67 @@ class TreeAnglePlugin:
             active,
             attributes=capture_attributes,
         )
+
+    def _select_tree_from_history(self, feature_id: int) -> None: 
+        """ select a history entry's kite and center it on map"""
+
+        layer = self.annotation_layer 
+
+        if layer is None or not is_kite(layer): 
+            self._message(
+                    f"the history annotation layer is not available.",
+                    error=True
+                    )
+            return 
+
+        feature = layer.getFeature(feature_id)
+
+        if not feature.isValid():
+            self._message(f"tree feature {feature_id} no longer exists",
+            error=True
+            )
+
+            self._refresh_tree_history()
+            return 
+        
+        # activate and make the annotation layer visible 
+        self.iface.setActiveLayer(layer)
+        project = QgsProject.instance() 
+
+        if project is None: 
+            return  
+
+        root = project.layerTreeRoot()
+        
+        if root is None: 
+            return 
+
+        layer_node = (
+                root.findLayer(layer.id())
+                )
+
+        if layer_node is not None: 
+            layer_node.setItemVisibilityChecked(True)
+        
+        # select this kite
+        layer.selectByIds([feature_id])
+
+        geometry = feature.geometry() 
+
+        if not geometry.isNull() and not geometry.isEmpty(): 
+            center = geometry.boundingBox().center()
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+
+            if layer.crs() != canvas_crs: 
+                transform = QgsCoordinateTransform(
+                        layer.crs(), 
+                        canvas_crs, 
+                        project.transformContext()
+                        ) 
+                center = transform.transform(center)
+
+            # move tree without changing zoom 
+            self.canvas.setCenter(center)
+
+        self.canvas.refresh()
+

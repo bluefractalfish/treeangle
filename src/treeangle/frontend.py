@@ -443,6 +443,7 @@ def _metric_record(value: object) -> str:
 
 class TreeDock(QDockWidget): 
     """ display measurments stored in the active annotation layer"""
+    feature_clicked = pyqtSignal(int)
 
     def __init__(
             self, 
@@ -476,6 +477,7 @@ class TreeDock(QDockWidget):
                 )
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.cellClicked.connect(self._row_clicked)
 
         self.setWidget(self._table)
 
@@ -569,7 +571,27 @@ class TreeDock(QDockWidget):
                     )
 
             self._table.resizeColumnsToContents() 
-            self.setWindowTitle(f"TREE HISTORY ({len(records)})")
+            self.setWindowTitle(f"TREE_HISTORY")
+
+    def _row_clicked(self, row: int, _column: int) -> None:
+        """emits feature ID stored in clicked row"""
+
+        tree_item = self._table.item(row, 0)
+
+        if tree_item is None: 
+            return 
+
+        stored_id = tree_item.data(
+                Qt.ItemDataRole.UserRole
+                )
+
+        try: 
+            feature_id = int(stored_id)
+        except (TypeError, ValueError): 
+            return 
+
+        self.feature_clicked.emit(feature_id)
+
 
 
 
