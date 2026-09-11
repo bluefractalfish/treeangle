@@ -12,7 +12,7 @@ source_directory="$project_directory/src/treeangle"
 data_directory="${XDG_DATA_HOME:-${HOME}/.local/share}"
 
 # directory that QGIS sees 
-plugin_directory="$data_directory/QGIS/QGIS3/profiles/$profile_name/python/plugins/treeangle"
+plugin_directory="$data_directory/QGIS/QGIS4/profiles/$profile_name/python/plugins/treeangle"
 
 if [[ ! -d "$source_directory" ]]; then 
     echo "plugin dir not found: "
