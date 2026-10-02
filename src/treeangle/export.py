@@ -47,11 +47,15 @@ class ExportOptions:
     write_review: bool = True
 
     # other options - noncentered trees, empty patches 
-    n_empty_patches_per_kite: int | None = None # two per kite
-    n_edge_samples_per_kite: int | None = None # 1 per kite?
-    empty_patches_source: Path| str | None = None # audit, geopackage?
-    edges_sample_radius_units: str | None = None 
-    edges_sample_radius: int | None = None 
+    sample_area_layer_id: str = "" 
+    area_sample_count: int = 0 
+    offsets_per_tree: int = 0 
+    offset_min_px: int = 64
+    offset_max_px: int = 496
+    allow_partial_trees: bool = True
+
+    sample_seed: int = 37
+    sample_max_attempts: int = 500
     
 
     def validate(self):

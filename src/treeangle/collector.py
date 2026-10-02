@@ -13,6 +13,7 @@ import math
 import re
 import shutil
 import math
+import random 
 
 import numpy as np 
 from osgeo import gdal 
@@ -356,31 +357,154 @@ def display_ranges(source, options):
         ranges.append([low, high if high > low else low + 1.0])
     return ranges
 
-def make_sample(target, trees, index, source, transform, options):
-    window, padding_clipped = crop_window(
-        target.ring, transform, source.RasterXSize, source.RasterYSize,
-        options.padding_fraction, options.min_padding_pixels,
-        options.fixed_size if options.crop_mode == "fixed" else None,
-        square=options.crop_mode == "square")
-    left, top, width, height = window
-    if width * height > options.max_crop_pixels:
-        raise ValueError("crop exceeds maximum area; check geometry or crop settings")
-    crop_transform = shifted_transform(transform, left, top)
-    corners = [pixel_to_world(p, crop_transform) for p in bbox_ring([0, 0, width, height])]
-    footprint = polygon(corners)
-    nearby = []
-    for number in sorted(index.intersects(footprint.boundingBox())):
-        tree = trees[number]
-        if not tree.geometry.intersects(footprint):
-            continue
-        label = pixel_label(tree.points, tree.ring, crop_transform, width, height)
-        x0, y0, x1, y1 = label["bbox_xyxy_px"]
-        if x1 > x0 and y1 > y0:
-            label.update(tree_id=tree.tree_id, is_target=tree.tree_id == target.tree_id)
-            nearby.append((number, label))
-    targets = [label for _, label in nearby if label["is_target"]]
-    return {"target_tree_id": target.tree_id, "window": window, "geotransform": crop_transform,
-            "corners": corners, "padding_clipped": padding_clipped, "nearby": nearby}
+def offset_window(center_x, center_y, size, minimum, maximum, rng,):
+
+    angle = rng.uniform(0.0, math.tau)
+
+    radius = math.sqrt(
+        rng.uniform(minimum**2, maximum**2)
+    )
+
+    shifted_x = center_x + radius * math.cos(angle)
+    shifted_y = center_y + radius * math.sin(angle)
+
+    left = round(shifted_x - size / 2)
+    top = round(shifted_y - size / 2)
+
+    return [left, top, size, size]
+
+def make_sample(target, 
+                trees,
+                index,
+                source,
+                transform,
+                options, 
+                *, 
+                used_windows, 
+                rng, 
+                kind="centered", 
+                ):
+    """ builds one centered or offset sample of the raster 
+    corresponding to target tree return None when center crop was already exported 
+    retreis duplicates or unsuiotable offset windows 
+    the caller records the window in used winmdows after saving to avoid duplicate 
+    """
+
+    if kind == "centered":
+        
+        # get requested window from raster given target
+        window, padding_clipped = crop_window(
+            target.ring,
+            transform,
+            source.RasterXSize,
+            source.RasterYSize,
+            options.padding_fraction,
+            options.min_padding_pixels,
+            options.fixed_size if options.crop_mode == "fixed" else None,
+            square=options.crop_mode == "square", 
+            )
+        attempts = 1 
+    else:
+        if options.crop_mode != "fixed":
+            raise ValueError("offset sampling requires fixed crop window")
+
+        size = options.fixed_size
+
+        # locate trees bounding box in source pixels 
+        x0, y0, x1, y1 = pixel_bbox([
+            world_to_pixel(point, transform)
+            for point in target.ring 
+            ])
+
+        center_x = (x0 + x1) / 2
+        center_y = (y0 + y1) /2 
+
+        padding_clipped = None
+        attempts = options.sample_max_attempts 
+
+    for _ in range(attempts):
+        if kind == "offset":
+            window = offset_window(
+                    center_x, 
+                    center_y, 
+                    size, 
+                    options.offset_min_px, 
+                    options.offset_max_px, 
+                    rng
+                    )
+
+
+        left, top, width, height = window
+
+        # reject window outside of raster
+        if (
+                left < 0 
+                or top < 0
+                or left + width > source.RasterXSize 
+                or top + height > source.RasterYSize
+                ):
+            continue 
+        # share this set across every exported tree
+        key = tuple(window)
+
+        if key in used_windows:
+            if kind == "centered":
+                return None 
+            continue 
+
+
+        crop_transform = shifted_transform(transform, left, top)
+        corners = [pixel_to_world(p, crop_transform) for p in bbox_ring([0, 0, width, height])]
+        footprint = polygon(corners)
+
+        nearby = [] 
+
+        candidates = index.intersects(footprint.boundingBox())
+        
+        for number in sorted(candidates):
+            tree = trees[number]
+            if not tree.geometry.intersects(footprint):
+                continue
+            label = pixel_label(
+                    tree.points,
+                    tree.ring,
+                    crop_transform,
+                    width,
+                    height
+                    )
+            x0, y0, x1, y1 = label["bbox_xyxy_px"]
+            if x1 > x0 and y1 > y0:
+                label.update(
+                        tree_id=tree.tree_id,
+                        is_target=tree.tree_id == target.tree_id
+                        )
+                nearby.append((number, label))
+        target_labels = [label for _, label in nearby if label["is_target"]]
+        require_whole_target = (kind == "centered" or not options.allow_partial_trees)
+
+        if require_whole_target:
+            if (len(target_labels) != 1 
+                or target_labels[0]["truncated"]
+                ):
+                if kind == "centered":
+                    raise ValueError("target would be missing or truncated")
+                continue 
+
+        return {
+                "sample_id": (
+                    f"{target.key}_{kind}_"
+                    f"{left}_{top}_{width}_{height}"
+                    ), 
+                "sample_kind": kind, 
+                "target_tree_id": target.tree_id,
+                "window": window,
+                "geotransform": crop_transform,
+                "corners": corners,
+                "padding_clipped": padding_clipped,
+                "nearby": nearby
+                }
+        raise ValueError(f"no unique valid {kind} window after {attempts} attempts")
+
 
 
 def write_tiff(source, path, sample):

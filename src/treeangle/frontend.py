@@ -54,7 +54,8 @@ from qgis.gui import (
         QgsMapMouseEvent,
         QgsMapCanvas, 
         QgsMapTool, 
-        QgsRubberBand
+        QgsRubberBand, 
+        QgsMapLayerComboBox
         )
 
 
@@ -1317,6 +1318,7 @@ class ExportDialog(QDialog):
         
         self.add_sources(annotation_layer)
         self.add_crop_settings()
+        self.add_sample_settings()
         self.add_image_settings()
 
 
@@ -1447,6 +1449,107 @@ class ExportDialog(QDialog):
                                "current RGB renderer when available. PNG colors use the contrast setting "
                                "above, not every QGIS styling effect. All clean PNGs and one COCO keypoint "
                                "file go in png/. TIFFs go in tif/. any drawn images go in review/."))
+    
+    def add_sample_settings(self):
+        form = self.tab("sampling")
+        
+        # user defined polygon area for random samples 
+        self.sample_area = QgsMapLayerComboBox(self)
+        self.sample_area.setProject(self.project)
+        self.sample_area.setFilters(
+                Qgis.LayerFilter.PolygonLayer   
+                )
+        self.sample_area.setAllowEmptyLayer(
+                True, 
+                "choose an area to sample from" 
+                )
+        saved_id = self.saved.get(
+                "sample_area_layer_id", 
+                "", 
+                )
+        saved_layer = self.project.mapLayer(saved_id)
+
+        if isinstance(saved_layer, QgsVectorLayer):
+            self.sample_area.setLayer(saved_layer)
+        else:
+            self.sample_area.setLayer(None)
+
+        form.addRow(
+                "sampling-area layer", 
+                self.sample_area    
+                )
+
+        self.area_sample_count = self.integer(
+                0, 1000000, 
+                self.saved.get("area_sample_count", 0), 
+                " patches", 
+                )
+
+        form.addRow(
+                "random patches from area", 
+                self.area_sample_count
+                )
+
+        # additional windows around each target tree -- provides displaced examples where tree isnt centered    
+        
+        self.offsets_per_tree = self.integer(
+                0, 100, 
+                self.saved.get("offsets_per_tree", 0), 
+                " patches per tree"
+                )
+        form.addRow(
+                "offset patches per kite", 
+                self.offsets_per_tree
+                )
+
+        self.offset_min_px = self.integer(
+                0, 100_000, 
+                self.saved.get("offset_min_px", 64), 
+                " px", 
+                )
+        form.addRow(
+                "min center displacement", 
+                self.offset_min_px
+                )
+
+        self.offset_max_px = self.integer(
+                0, 100_000, 
+                self.saved.get("offset_max_px", 496), 
+                " px", 
+                )
+        form.addRow(
+                "max center displacement", 
+                self.offset_max_px
+                )
+
+        self.allow_partial_trees = self.check(
+                "allow offset crops to cut through target trees",
+                self.saved.get("allow_partial_trees", True), 
+                )
+
+        form.addRow(self.allow_partial_trees)
+        
+        self.sample_max_attempts = self.integer(
+                0, 
+                100_000, 
+                self.saved.get("sample_max_attempts", 496), 
+                " iterations",
+                )
+        form.addRow("maximum sampling attempts", self.sample_max_attempts)
+        self.sample_seed = self.integer(
+                0, 
+                2_000_000, 
+                self.saved.get("sample_seed", 37), 
+                )
+        form.addRow(
+                "random seed", 
+                self.sample_seed
+                )
+
+
+
+
+
 
     def fill_bands(self, *_):
         layer_id = self.raster.currentData()
@@ -1527,6 +1630,23 @@ class ExportDialog(QDialog):
                 selected_count += layer.selectedFeatureCount()
             if self.selected.isChecked() and selected_count == 0:
                 raise ValueError("no kites are selected in the chosen layers")
+            area_layer = self.sample_area.currentLayer()
+            if self.area_sample_count.value() > 0:
+                if (
+                    not isinstance(area_layer, QgsVectorLayer)
+                    or not area_layer.isValid()
+                    or area_layer.geometryType()
+                    != Qgis.GeometryType.Polygon):
+                     raise ValueError( "Choose a valid polygon sampling-area layer")
+                if not area_layer.crs().isValid():
+                    raise ValueError(
+                        "The sampling-area layer needs a valid CRS"
+                    )
+
+                if area_layer.isEditable():
+                    raise ValueError(
+                        "Save the sampling-area edits and turn editing off"
+                    )
             options = ExportOptions(
                 raster_id=raster_id, kite_layer_ids=ids,
                 output_parent=str(Path(self.output.text().strip()).expanduser().absolute()),
@@ -1539,6 +1659,18 @@ class ExportDialog(QDialog):
                 png_max_size = self.png_size.value(), 
                 canonicalize_sides=self.sides.isChecked(), 
                 write_review=self.review.isChecked(), 
+                sample_area_layer_id = (
+                    area_layer.id() 
+                    if isinstance(area_layer, QgsVectorLayer) 
+                    else ""
+                    ), 
+                area_sample_count=self.area_sample_count.value(), 
+                offsets_per_tree=self.offsets_per_tree.value(), 
+                offset_min_px=self.offset_min_px.value(), 
+                offset_max_px=self.offset_max_px.value(), 
+                allow_partial_trees=self.allow_partial_trees.isChecked(), 
+                sample_seed=self.sample_seed.value(), 
+                sample_max_attempts=self.sample_max_attempts.value()
                 )
 
 

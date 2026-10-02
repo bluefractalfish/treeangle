@@ -2,7 +2,7 @@
 name=TreeAngle
 description=for fallen-tree annotations of crown width, fallen length, fall direction, and damage classification
 about=TreeAngle is a tool designed to create keypoint annotations of a fallen trees. The user is able to annotate the highest point of the tree, the base or break origin plus two distal crown edges. It saves  coordinates, measurements, damage attributes, and raster provenance to a GeoPackage layer. The user can define and apply damage classes according to different observed failure modes, degrees of branch/crown loss, ground type, tree health, species, visibility, etc. 
-version=3.5.5
+version=3.5.8
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 author=quin

@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import math
+import random
 
 import numpy as np 
 from osgeo import gdal 
@@ -43,6 +44,8 @@ class ExportJob(QObject):
         self.done = self.cancelled = False
         self.source = self.output_dir = None
         self.position = 0
+        self.used_windows = set()
+        self.rng = random.Random(options.sample_seed)
         self.coco, self.samples, self.errors, self.used = new_coco(), [], [], set()
         self.progress = QProgressDialog("PREPARING KITES", "CANCEL", 0, 0, iface.mainWindow())
         self.progress.setWindowModality(Qt.WindowModality.NonModal)
@@ -64,6 +67,12 @@ class ExportJob(QObject):
             self.trees, self.targets, self.index = collect_trees(
                     project, self.options, self.crs
                     )
+            # all centered crops processed before offsets 
+            self.requests = [(number, "centered") for number in self.targets]
+            for number in self.targets:
+                for _ in range(self.options.offsets_per_tree):
+                    self.requests.append((number, "offset"))
+
             self.ranges = display_ranges(self.source, self.options)
             stamp = datetime.now(timezone.utc).strftime("run_%y%m%d_%fZ")
             self.output_dir = Path(self.options.output_parent).expanduser() / stamp
@@ -86,25 +95,32 @@ class ExportJob(QObject):
                         "outside points missing (0)"
                         }
             write_json(self.output_dir / "run.json", self.run)
-            self.progress.setRange(0, len(self.targets))
+            self.progress.setRange(0, len(self.requests))
             self.timer.start(0)
         except Exception as error:
             self.errors.append({"stage": "preparing to fly", "error": str(error)})
             self.finish()
 
 
-    def export_one(self, number):
+    def export_one(self, number, kind="centered"):
         tree = self.trees[number]
         sample = make_sample(tree, 
                              self.trees,
                              self.index,
                              self.source,
                              self.transform,
-                             self.options
+                             self.options, 
+                             used_windows = self.used_windows, 
+                             rng=self.rng, 
+                             kind=kind
                              )
+        if sample is None:
+            return 
+        sample_key = sample["sample_id"]
+
         pending = self.output_dir / "_pending"
-        files = [(pending / f"{tree.key}.tif", self.output_dir / "tif" / f"{tree.key}.tif"),
-                 (pending / f"{tree.key}.png", self.output_dir / "png" / f"{tree.key}.png")]
+        files = [(pending / f"{sample_key}.tif", self.output_dir / "tif" / f"{sample_key}.tif"),
+                 (pending / f"{sample_key}.png", self.output_dir / "png" / f"{sample_key}.png")]
         crop = None
         try:
             crop = write_tiff(self.source, files[0][0], sample)
@@ -136,8 +152,8 @@ class ExportJob(QObject):
                 raise ValueError("PNG exceeds 20 MB set a smaller maximum PNG edge")
             if self.options.write_review:
                 files.append(
-                        (pending / f"{tree.key}.review.png",
-                         self.output_dir / "review" / f"{tree.key}.png")
+                        (pending / f"{sample_key}.review.png",
+                         self.output_dir / "review" / f"{sample_key}.png")
                         ) 
                 write_png(draw_review(image, annotations), files[-1][0])
             for temporary, destination in files:
@@ -150,8 +166,8 @@ class ExportJob(QObject):
             raise
         self.used.update(n for n, _ in sample.pop("nearby"))
         sample.update(image_id=image_id,
-                      png=f"png/{tree.key}.png",
-                      tif=f"tif/{tree.key}.tif",
+                      png=f"png/{sample_key}.png",
+                      tif=f"tif/{sample_key}.tif",
                       png_size=[
                           image.width(),
                           image.height()
@@ -160,22 +176,23 @@ class ExportJob(QObject):
                       annotations=links
                       )
         self.samples.append(sample)
-        self.coco["images"].append({"id": image_id, "file_name": f"{tree.key}.png",
+        self.coco["images"].append({"id": image_id, "file_name": f"{sample_key}.png",
                                     "width": image.width(), "height": image.height()})
         self.coco["annotations"].extend(annotations)
+        self.used_windows.add(tuple(sample["window"]))
 
     def step(self):
         if self.done:
             return
-        if self.cancelled or self.position == len(self.targets):
+        if self.cancelled or self.position == len(self.requests):
             self.finish()
             return
-        number = self.targets[self.position]
+        number, kind = self.requests[self.position]
         self.progress.setLabelText(
-                f"{self.position + 1}/{len(self.targets)}: {self.trees[number].tree_id}"
+                f"{self.position + 1}/{len(self.requests)}: {self.trees[number].tree_id}"
                 )
         try:
-            self.export_one(number)
+            self.export_one(number, kind)
         except OSError as error:
             self.errors.append({"tree_id": self.trees[number].tree_id, "error": str(error)})
             self.cancelled = True  # Stop repeated writes after a filesystem failure.
