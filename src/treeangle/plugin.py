@@ -176,7 +176,13 @@ class TreeAnglePlugin:
         self.initEditor() 
         # open editor to select kites 
         self.initSelector() 
-        #
+        # 
+
+        self.export_action = self._create_action(
+                "EXPORT_KITES>", 
+                self.show_export_dialog
+                )
+
         self.initAnnotationFields()
         #=============================================#
 
@@ -334,10 +340,6 @@ class TreeAnglePlugin:
         self.apply_class_action = self._create_action(
             ">APPLY_CLASS",
             self.apply_active_class_to_selection,
-                )
-        self.export_action = self._create_action(
-                "FLY_KITES>", 
-                self.show_export_dialog
                 )
 
     def initEditor(self) -> None: 

@@ -1299,7 +1299,7 @@ class ExportDialog(QDialog):
         self.iface = iface 
         self.options = None 
         self.setWindowTitle("EXPORT_KITES")
-        self.resize(600,570)
+        self.resize(600,610)
         self.project = QgsProject.instance()
 
         try:
@@ -1402,9 +1402,10 @@ class ExportDialog(QDialog):
         form.addRow("kite layers", self.kites)
         self.selected = self.check("selected trees only", self.saved.get("selected", False)) 
 
-        self.limit = self.integer(0, 1_000_000, self.saved.get("limit") if self.saved.get("limit") is not None else 20) 
+        self.limit = self.integer(0, 1_000_000, self.saved.get("limit") if self.saved.get("limit") is not None else "20") 
         self.limit.setSpecialValueText("all trees") 
         form.addRow("maximum trees", self.limit) 
+        form.addRow(self.selected)
         row = QWidget(self) 
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0,0,0,0) 
@@ -1414,7 +1415,7 @@ class ExportDialog(QDialog):
                 else Path.home()
                 )
 
-        self.output = QLineEdit(str(self.saved.get("output_parent") or base / "W" / "artifacts" / "tree_patches"), row) 
+        self.output = QLineEdit("", row) 
         browse = QPushButton("browse", row)
         browse.clicked.connect(self.browse_output)
         layout.addWidget(self.output, 1 ) 
