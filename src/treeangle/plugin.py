@@ -38,6 +38,8 @@ from qgis.core import (
     QgsRasterLayer,
     QgsVectorLayer,
     QgsSettings,
+    QgsFeature, 
+    QgsFeatureRequest
 )
 
 from .damage_classes import (
@@ -55,8 +57,10 @@ from .frontend import (
     CaptureTool,
     EditTool,
     FormDialog,
-    TreeDock
+    TreeDock, 
+    ExportDialog
 )
+from .export import export_training_pairs
 from .geometry import measure
 from .layers import (
     RasterSource,
@@ -72,8 +76,9 @@ from .layers import (
     source_from,
     synchronize,
     upsert_fall_vector,
-    apply_annotation_values
-)
+    apply_annotation_values, 
+    points_from
+) 
 
 EnumValue = TypeVar(
     "EnumValue",
@@ -87,7 +92,7 @@ GROUND_TYPE_SETTING_KEY = "treeangle/current_ground_type"
 HEALTH_SETTING_KEY = "treeangle/current_health"
 
 def _exec_dialog(dialog: QDialog) -> bool:
-    """Run a dialog under either Qt 5 or Qt 6."""
+    """run a dialog under either Qt 5 or Qt 6"""
 
     execute = getattr(dialog, "exec", None)
 
@@ -100,16 +105,19 @@ class TreeAnglePlugin:
 
     """ treeangle plugin interface """
     def __init__(self, iface) -> None: 
+
         self.iface = iface 
-        self.tree_count_label = None 
+
         self._watched_annotation_layer = None
         self.canvas = iface.mapCanvas()
-        self.toolbar = None 
-        self.attribute_toolbar = None 
+        self.toolbar = None
         self.actions: list[QAction] = [] 
+        self.attribute_toolbar = None 
+
         # layers 
         self.annotation_layer = None 
         self.fall_vector_layer = None 
+
         # tools 
         self.capture_tool = None 
         self.edit_tool = None 
@@ -120,22 +128,28 @@ class TreeAnglePlugin:
         self.tree_type_dropdown: QComboBox | None = None
         self.ground_type_dropdown: QComboBox | None = None
         self.health_dropdown: QComboBox | None = None
-
         self.apply_fields_action: QAction | None = None
+
         #actions 
         self.create_action: QAction | None = None 
         self.create_class_action: QAction | None = None 
         self.capture_action: QAction | None = None
         self.edit_action: QAction | None = None 
         self.apply_class_action: QAction | None = None 
-        self.select_action: QAction | None = None 
-        
+        self.select_action: QAction | None = None  
+        self.export_action = None 
+        self._export_job = None 
+
         self.edit_class_action = None 
         self.delete_class_action = None 
 
+        #damage classes 
         self.damage_dropdown: QComboBox | None=None 
         self.damage_store = DamageClassStore()
 
+        #treecount
+        self.tree_count_label = None 
+        
     def initGui(self) -> None: 
 
         # create toolbar 
@@ -143,7 +157,7 @@ class TreeAnglePlugin:
         self.toolbar.setObjectName("TreeAngleTools")
         
         self.attribute_toolbar = self.iface.addToolBar(
-                "Kite Attributes"
+                "kite_attributes"
                 )
         self.attribute_toolbar.setObjectName(
                 "TreeAngleAttributeTools"
@@ -196,7 +210,7 @@ class TreeAnglePlugin:
         )
 
         history_action = self.history_dock.toggleViewAction()
-        history_action.setText("history")
+        history_action.setText("HISTORY")
         self.toolbar.addAction(history_action)
         self.history_dock.show()
     
@@ -272,18 +286,18 @@ class TreeAnglePlugin:
         native_select = self.iface.actionSelect()
 
         self.select_action = self._create_action(
-                "|SELECT_KITES|", 
+                "SELECT_KITES>", 
                 self.activate_selection, 
                 )
     def initAnnotator(self) -> None: 
         self.capture_action = self._create_action(
-                "|ANNOTATE|", 
+                "+ANNOTATE", 
                 self.activate_capture, 
                 checkable=True
                 )
     def initGPKGCreation(self) -> None: 
         self.create_action = self._create_action(
-                "|OPEN_GPKG|", 
+                ">OPEN_GPKG", 
                 self.create_annotation_layer
                 )
     def initDamageClasses(self) -> None: 
@@ -292,7 +306,7 @@ class TreeAnglePlugin:
             return 
 
         self.create_class_action = self._create_action(
-                "| CREATE_CLASS", 
+                "+CREATE_CLASS", 
                 self.create_damage_class 
                 ) 
         self.damage_dropdown = QComboBox(self.toolbar)
@@ -309,28 +323,43 @@ class TreeAnglePlugin:
         self._refresh_damage_dropdown() 
 
         self.edit_class_action = self._create_action(
-                "EDIT_CLASS", 
+                "EDIT_CLASS<", 
                 self.edit_damage_class,
                 ) 
         self.delete_class_action = self._create_action(
-                "DELETE_CLASS", 
+                "-DELETE_CLASS", 
                 self.delete_damage_class
                 )
 
         self.apply_class_action = self._create_action(
-            "APPLY_CLASS|",
+            ">APPLY_CLASS",
             self.apply_active_class_to_selection,
-        )
+                )
+        self.export_action = self._create_action(
+                "FLY_KITES>", 
+                self.show_export_dialog
+                )
 
     def initEditor(self) -> None: 
         self.edit_action = self._create_action(
-                "|EDIT_POINTS|", 
+                "EDIT_POINTS<", 
                 self.activate_edit, 
                 checkable=True 
                 )  
 
     def unload(self) -> None: 
         """ removes menu items """
+        job = self._export_job
+
+        if job is not None and not job.done:
+            try:
+                job.finished.disconnect(self._export_finished)
+            except (TypeError, RuntimeError):
+                pass
+
+            job.cancel()
+
+        self._export_job = None
 
         if (
                 self.capture_tool 
@@ -421,7 +450,78 @@ class TreeAnglePlugin:
 
         self.actions.append(action)
         return action
-    
+
+    def show_export_dialog(self, _checked=False): 
+        if self._export_job is not None and not self._export_job.done:
+            self._message("an export is already exporting") 
+            return 
+
+        dialog = None
+
+        try: 
+            # shows export dialog 
+            dialog = ExportDialog(
+                self.iface,
+                self.annotation_layer,
+            )
+
+            if not _exec_dialog(dialog) or dialog.options is None:
+                return
+
+            # starts export job with options from dialog 
+            self._export_job = export_training_pairs(
+                self.iface,
+                dialog.options,
+            )
+
+            self._export_job.finished.connect(
+                self._export_finished
+            )
+
+            if self.export_action is not None:
+                self.export_action.setEnabled(False)
+
+        except Exception as error:
+            self._message(
+                f"could not start export: {error}",
+                error=True,
+            )
+
+        finally:
+            if dialog is not None:
+                dialog.deleteLater()
+
+    def _export_finished(self, result):
+        self._export_job = None
+
+        if self.export_action is not None:
+            self.export_action.setEnabled(True)
+
+        if not result["finalized"]:
+            status = "export incomplete"
+        elif result["cancelled"]:
+            status = "export cancelled"
+        else:
+            status = "export finished"
+
+        message = (
+            f"{status}: "
+            f"{result['exported']} crops, "
+            f"{result['failed']} errors.\n"
+            f"output: {result['output_dir']}"
+        )
+
+        if result["errors"]:
+            message += (
+                f"\nfirst error: "
+                f"{result['errors'][0]['error']}"
+            )
+
+        self._message(
+            message,
+            error=result["failed"] > 0,
+        ) 
+
     def create_damage_class(
         self,
         _checked: bool = False,
@@ -451,6 +551,7 @@ class TreeAnglePlugin:
         self._refresh_damage_dropdown()
         self._message(f"damage_class: {damage_class.name} is now active ")
         return damage_class 
+
     def edit_damage_class(
             self, 
             _checked: bool = False, 
@@ -512,6 +613,7 @@ class TreeAnglePlugin:
                 "click or drag to select kites"
                 " then choose a damage class and click APPLY CLASS"
                 )
+
     def apply_active_class_to_selection(self, _checked: bool = False) -> None: 
         """ apply the class and selected optional values """
 
@@ -563,7 +665,21 @@ class TreeAnglePlugin:
 
             vector_layer = self._ensure_fall_vector_layer(layer)
 
-            synchronize(layer, vector_layer) 
+            request = QgsFeatureRequest().setFilterFids(feature_ids)
+            iterator = layer.getFeatures(request)
+            feature = QgsFeature()
+
+            try:
+                while iterator.nextFeature(feature):
+                    upsert_fall_vector(
+                        vector_layer,
+                        feature,
+                        points_from(feature),
+                    )
+                    feature = QgsFeature()
+            finally:
+                iterator.close()
+
         except (ValueError, RuntimeError) as error: 
             self._message(str(error), error=True)
             return 

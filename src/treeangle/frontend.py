@@ -2,20 +2,53 @@
 
     
     FormDialog: dialog for damage form creation and selection 
+    ExportDialog: dioalog for exporting kites/patches for training 
     CaptureTool: handles annotations and draws preview 
     EditTool: handles selecting and dragging points when editing existing Kite
 
 
 """
+from dataclasses import dataclass, asdict 
+from datetime import datetime, timezone
+from pathlib import Path
+import csv 
+import json
+import math
+import re
+import shutil
+import math
 
-from __future__ import annotations 
+import numpy as np 
+from osgeo import gdal 
+
+from qgis.PyQt.QtCore import Qt, QObject, QPointF, QMetaType, QTimer, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QImage, QPainter, QPen 
+from qgis.PyQt.QtWidgets import (
+        QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+            QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QTabWidget,
+                    QVBoxLayout, QWidget, QProgressDialog
+                    )
+from qgis.core import(
+        Qgis, QgsProject, QgsRasterLayer, QgsSettings, QgsVectorLayer, 
+            QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
+    QgsField, QgsGeometry, QgsPointXY, QgsSpatialIndex, QgsVectorFileWriter, )
+
+
+from .geometry import Kite, Point
+
+from .collector import (
+        open_raster, collect_trees, display_ranges, write_json, make_sample, write_tiff, 
+        make_png, coco_annotation, write_png, write_split_groups, write_vectors, draw_review
+        )
+from .export import ExportOptions
 
 
 from enum import Enum  
 from math import hypot
 from typing import Callable  
 
-from qgis.PyQt.QtCore import Qt, pyqtSignal, QSettings, QPoint
+from qgis.PyQt.QtCore import Qt, pyqtSignal, QSettings, QPoint, QTimer 
 from qgis.PyQt.QtGui import QColor, QCursor, QKeyEvent
 from qgis.gui import (
         QgsMapMouseEvent,
@@ -47,6 +80,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import (
         Qgis, 
         QgsFeature, 
+        QgsProject,
         QgsFeatureRequest, 
         QgsGeometry, 
         QgsPointXY, 
@@ -72,7 +106,7 @@ from .damage_classes import (
         Ternary
 
         ) 
-
+from .collector import is_export_source
 from .geometry import measure 
 
 __all__ = [
@@ -480,15 +514,54 @@ class TreeDock(QDockWidget):
         self._table.cellClicked.connect(self._row_clicked)
 
         self.setWidget(self._table)
+        
+        self._history_dirty = False 
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.timeout.connect(self._flush_history)
 
     def set_layer(
             self, 
             layer: QgsVectorLayer | None, 
             ) -> None: 
+        if self._layer is layer: 
+            return 
         self._layer = layer 
         self.refresh()
+
+    def refresh(self, *_unused: object) -> None: 
+        self._history_dirty = True 
+
+        if self.isVisible():
+            self._history_timer.start(120) 
+
+    def showEvent(self, event): 
+        super().showEvent(event) 
+
+        if self._history_dirty: 
+            self._history_timer.start(120) 
+
+    def _flush_history(self) -> None: 
+        if not self._history_dirty or not self.isVisible(): 
+            return 
+
+        table = self._table
+        updates = table.updatesEnabled()
+        sorting = table.isSortingEnabled()
+        signals = table.blockSignals(True)
+
+        try:
+            table.setUpdatesEnabled(False)
+            table.setSortingEnabled(False)
+
+            self._rebuild_history()
+            self._history_dirty = False
+        finally:
+            table.setSortingEnabled(sorting)
+            table.setUpdatesEnabled(updates)
+            table.blockSignals(signals)
     
-    def refresh(self,*_unused: object) -> None: 
+    def _rebuild_history(self,*_unused: object) -> None: 
         """ rebuild table from annotation geopackage  """
 
         layer = self._layer 
@@ -502,7 +575,22 @@ class TreeDock(QDockWidget):
         records: list[
                 tuple[str, int, str, str, str, str]
                 ] = []
-        iterator = layer.getFeatures()
+
+        request = QgsFeatureRequest()
+        request.setFlags(Qgis.FeatureRequestFlag.NoGeometry)
+
+        request.setSubsetOfAttributes(
+            [
+                "tree_id",
+                "tree_h_m",
+                "crown_w_m",
+                "damage_class_name",
+                "created_at",
+            ],
+            layer.fields(),
+        )
+
+        iterator = layer.getFeatures(request)
         feature = QgsFeature()
 
         try: 
@@ -531,7 +619,7 @@ class TreeDock(QDockWidget):
                     )
                 )
         self._table.setRowCount(len(records))
-
+        
         for row, record in enumerate(records): 
             (
                     created_at, 
@@ -563,6 +651,7 @@ class TreeDock(QDockWidget):
                     QTableWidgetItem(created_at), 
                     )
 
+        
             for column, item in enumerate(values): 
                 self._table.setItem(
                         row, 
@@ -570,8 +659,7 @@ class TreeDock(QDockWidget):
                         item,
                     )
 
-            self._table.resizeColumnsToContents() 
-            self.setWindowTitle(f"TREE_HISTORY")
+        self.setWindowTitle(f"TREE_HISTORY")
 
     def _row_clicked(self, row: int, _column: int) -> None:
         """emits feature ID stored in clicked row"""
@@ -1198,3 +1286,268 @@ class EditTool(QgsMapTool):
                 geometry, 
                 None    
                 )
+
+#################################################################################################
+########### EXPORT DIALOG #######################################################################
+#################################################################################################
+
+class ExportDialog(QDialog):
+    SETTINGS_KEY =  "treeangle/export/options" 
+    
+    def __init__(self, iface, annotation_layer = None) -> None: 
+        super().__init__(iface.mainWindow())
+        self.iface = iface 
+        self.options = None 
+        self.setWindowTitle("EXPORT_KITES")
+        self.resize(600,570)
+        self.project = QgsProject.instance()
+
+        try:
+            saved = json.loads(str(QgsSettings().value(self.SETTINGS_KEY, "{}")))
+            if not isinstance(saved, dict):
+                saved = {}
+
+        except (TypeError, ValueError):
+            saved = {}
+
+        self.saved = saved 
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget(self)
+        layout.addWidget(self.tabs)
+        
+        self.add_sources(annotation_layer)
+        self.add_crop_settings()
+        self.add_image_settings()
+
+
+        buttons = QDialogButtonBox(parent=self)
+        run = buttons.addButton("RUN", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        run.setEnabled(self.raster.count() > 0 and self.kites.count() > 0 )
+        if not run.isEnabled():
+            layout.insertWidget(0, self.note(
+                "load a local raster and a TreeAngle kite layer first")
+                                )
+    
+    def add_crop_settings(self):
+        form = self.tab("crop") 
+        self.mode = QComboBox(self) 
+        for title, value in (("bounding box + padding", "bbox"), 
+                             ("square around tree + padding", "square"),
+                             ("fixed square in source pixels", "fixed")):
+            self.mode.addItem(title, value) 
+
+        self.mode.setCurrentIndex(max(0, self.mode.findData(self.saved.get("crop_mode", "square"))))  
+        form.addRow("crop shape", self.mode) 
+        self.padding = QDoubleSpinBox(self)
+        self.padding.setRange(0,200)
+        self.padding.setDecimals(1)
+        self.padding.setSuffix(" % per side") 
+        self.padding.setValue(100 * float(self.saved.get("padding_fraction", .15))) 
+        form.addRow("context padding", self.padding)
+        self.minimum = self.integer(0, 100000,self.saved.get("min_padding_pixels", 16), " px")
+        form.addRow("min padding", self.minimum)
+        self.fixed = self.integer(1, 16384, self.saved.get("fixed_size", 512), " px per side")
+        form.addRow("fixed crop size", self.fixed)
+        self.max_area = QDoubleSpinBox(self)
+        self.max_area.setRange(.01, 64)
+        self.max_area.setDecimals(2)
+        self.max_area.setSuffix(" megapixels")
+        self.max_area.setValue(float(self.saved.get("max_crop_pixels", 16_000_000)) / 1_000_000)
+        form.addRow("max crop area", self.max_area)
+        self.mode.currentIndexChanged.connect(self.update_crop)
+        self.update_crop()
+        form.addRow(self.note(
+            "crop dimensions use source raster pixels. fixed 512 px crop copies "
+            "a 512 × 512 window without resizing.  "
+            "bounding boxes follow the raster's pixel axes. padding is the larger "
+            "of the percentage and the minimum; it may be reduced at raster edges.")) 
+
+    def add_sources(self, annotation_layer):
+        form = self.tab("sources") 
+        self.raster = QComboBox(self)
+        for layer in self.project.mapLayers().values():
+            if isinstance(layer, QgsRasterLayer) and layer.isValid() and layer.providerType() == "gdal":
+                self.raster.addItem(layer.name(), layer.id()) 
+
+        self.raster.setCurrentIndex(max(0, self.raster.findData(self.saved.get("raster_id", "")))) 
+        form.addRow("raster (GEOTIFF/VRT)", self.raster)
+
+        self.kites = QListWidget(self)
+        self.kites.setMaximumHeight(150)
+        
+        candidates = [layer for layer in self.project.mapLayers().values()
+                      if is_export_source(layer)]
+
+        preferred = self.iface.activeLayer()
+
+        if preferred not in candidates:
+            preferred = annotation_layer 
+        checked = set(self.saved.get("kite_layer_ids", [])) 
+        if not checked and preferred in candidates:
+            checked.add(preferred.id())
+        if len(candidates) == 1:
+            checked = {candidates[0].id()}
+        for layer in sorted(candidates, key=lambda l: (l.name(), l.source())):
+            item = QListWidgetItem(layer.name(), self.kites) 
+            item.setData(Qt.ItemDataRole.UserRole, layer.id())
+            item.setToolTip(layer.source())
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if layer.id() in checked else Qt.CheckState.Unchecked)
+        
+
+        form.addRow("kite layers", self.kites)
+        self.selected = self.check("selected trees only", self.saved.get("selected", False)) 
+
+        self.limit = self.integer(0, 1_000_000, self.saved.get("limit") if self.saved.get("limit") is not None else 20) 
+        self.limit.setSpecialValueText("all trees") 
+        form.addRow("maximum trees", self.limit) 
+        row = QWidget(self) 
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0,0,0,0) 
+        base = (
+                Path(self.project.fileName()).parent 
+                if self.project.fileName() 
+                else Path.home()
+                )
+
+        self.output = QLineEdit(str(self.saved.get("output_parent") or base / "W" / "artifacts" / "tree_patches"), row) 
+        browse = QPushButton("browse", row)
+        browse.clicked.connect(self.browse_output)
+        layout.addWidget(self.output, 1 ) 
+        layout.addWidget(browse)
+        form.addRow("output folder", row) 
+        form.addRow(self.note("each export creates a new run folder. existing layer filters will apply."))
+
+    def add_image_settings(self):
+        form = self.tab("PNG")
+        self.bands = [QComboBox(self) for _ in range(3)]
+        for name, combo in zip(("RED", "GREEN", "BLUE"), self.bands):
+            form.addRow(name, combo)
+        self.raster.currentIndexChanged.connect(self.fill_bands)
+        self.fill_bands()
+        self.stretch = QComboBox(self)
+        self.stretch.addItem("2–98%", "percentile")
+        self.stretch.addItem("keep 8-bit values (0–255)", "byte")
+        self.stretch.setCurrentIndex(max(0, self.stretch.findData(self.saved.get("stretch", "percentile"))))
+        form.addRow("PNG_CONTRAST", self.stretch)
+        self.png_size = self.integer(0, 4096, self.saved.get("png_max_size", 0), " px")
+        self.png_size.setSpecialValueText("native_crop")
+        form.addRow("max PNG edge", self.png_size)
+        self.sides = self.check("l_crown/r_crown consistent relative to base->tip",
+                                self.saved.get("canonicalize_sides", True))
+        form.addRow(self.sides)
+        self.review = self.check("save drawn review images", self.saved.get("write_review", True))
+        form.addRow(self.review)
+        form.addRow(self.note("Check band choices for multispectral imagery. Defaults use the "
+                               "current RGB renderer when available. PNG colors use the contrast setting "
+                               "above, not every QGIS styling effect. All clean PNGs and one COCO keypoint "
+                               "file go in png/. TIFFs go in tif/. any drawn images go in review/."))
+
+    def fill_bands(self, *_):
+        layer_id = self.raster.currentData()
+        raster = self.project.mapLayer(layer_id) if layer_id else None
+        if not isinstance(raster, QgsRasterLayer):
+            return
+        count = raster.bandCount()
+        renderer = raster.renderer()
+        defaults = [min(n, count) for n in (1, 2, 3)]
+        if renderer is not None and all(hasattr(renderer, n) for n in ("redBand", "greenBand", "blueBand")):
+            defaults = [renderer.redBand(), renderer.greenBand(), renderer.blueBand()]
+        if raster.id() == self.saved.get("raster_id"):
+            defaults = self.saved.get("rgb_bands", defaults)
+        for combo, default in zip(self.bands, defaults):
+            combo.clear()
+            for n in range(1, count + 1):
+                combo.addItem(f"{n}: {raster.bandName(n)}", n)
+            combo.setCurrentIndex(max(0, combo.findData(default)))
+
+
+    def tab(self, title): 
+        widget = QWidget(self)
+        form = QFormLayout(widget)
+        self.tabs.addTab(widget, title)
+        return form 
+
+    def note(self, text):
+        label = QLabel(text, self)
+        label.setWordWrap(True) 
+        return label 
+
+    def integer(self, minimum, maximum, value, suffix=""):
+        spin = QSpinBox(self)
+        spin.setRange(minimum, maximum)
+        spin.setValue(int(value))
+        spin.setSuffix(suffix)
+        return spin
+
+    def check(self, text, checked):
+        widget = QCheckBox(text, self)
+        widget.setChecked(bool(checked))
+        return widget
+
+
+    def browse_output(self):
+        chosen = QFileDialog.getExistingDirectory(self, "choose output folder", self.output.text())
+        if chosen:
+            self.output.setText(chosen) 
+
+    def update_crop(self): 
+        self.fixed.setEnabled(self.mode.currentData() == "fixed") 
+
+    def accept(self):
+        """ reads raster, kite layers, crop_dimensions, output_folder, and png settings. stores in exportOptions """ 
+        try:
+            checked_ids = []
+            for i in range(self.kites.count()):
+                item = self.kites.item(i)
+                if item is not None and item.checkState() == Qt.CheckState.Checked:
+                    layer_id = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(layer_id, str):
+                        checked_ids.append(layer_id)
+            ids = tuple(checked_ids)
+            if not ids:
+                raise ValueError("choose at least one kite layer")
+            if not self.output.text().strip():
+                raise ValueError("choose an output folder")
+            raster_id = self.raster.currentData()
+            if not raster_id or self.project.mapLayer(raster_id) is None:
+                raise ValueError("choose a raster that is still loaded")
+            selected_count = 0
+            for layer_id in ids:
+                layer = self.project.mapLayer(layer_id)
+                if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+                    raise ValueError("chosen kite layer is no longer available")
+                if layer.isEditable():
+                    raise ValueError(f"save edits and turn editing off for {layer.name()!r}")
+                selected_count += layer.selectedFeatureCount()
+            if self.selected.isChecked() and selected_count == 0:
+                raise ValueError("no kites are selected in the chosen layers")
+            options = ExportOptions(
+                raster_id=raster_id, kite_layer_ids=ids,
+                output_parent=str(Path(self.output.text().strip()).expanduser().absolute()),
+                limit=self.limit.value() or None, selected=self.selected.isChecked(),
+                padding_fraction=self.padding.value() / 100,
+                min_padding_pixels=self.minimum.value(), crop_mode=self.mode.currentData(),
+                fixed_size=self.fixed.value(), max_crop_pixels=round(self.max_area.value() * 1_000_000),
+                rgb_bands = tuple(combo.currentData() for combo in self.bands), 
+                stretch = self.stretch.currentData(), 
+                png_max_size = self.png_size.value(), 
+                canonicalize_sides=self.sides.isChecked(), 
+                write_review=self.review.isChecked(), 
+                )
+
+
+            options.validate()
+            QgsSettings().setValue(self.SETTINGS_KEY, json.dumps(asdict(options)))
+            self.options = options
+        except (TypeError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, "export settings", str(error))
+            return
+        super().accept()
+
+
+
