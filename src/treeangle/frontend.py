@@ -9,17 +9,10 @@
 
 """
 from dataclasses import dataclass, asdict 
-from datetime import datetime, timezone
 from pathlib import Path
-import csv 
 import json
 import math
-import re
-import shutil
-import math
 
-import numpy as np 
-from osgeo import gdal 
 
 from qgis.PyQt.QtCore import Qt, QObject, QPointF, QMetaType, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QImage, QPainter, QPen 
@@ -1408,6 +1401,12 @@ class ExportDialog(QDialog):
         self.limit.setSpecialValueText("all trees") 
         form.addRow("maximum trees", self.limit) 
         form.addRow(self.selected)
+        self.include_trees = self.check("export tree crops", self.saved.get("include_tree_crops", True))
+        form.addRow(self.include_trees)
+        self.tag_fields = QLineEdit(",".join(self.saved.get("tag_fields", ExportOptions.tag_fields)), self)
+        form.addRow("tag fields (comma separated)", self.tag_fields)
+        form.addRow(self.note("field names from kites. split group tags area always included with each tree in crop contributing tags"))
+
         row = QWidget(self) 
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0,0,0,0) 
@@ -1475,7 +1474,7 @@ class ExportDialog(QDialog):
             self.sample_area.setLayer(None)
 
         form.addRow(
-                "sampling-area layer", 
+                "null-area layer", 
                 self.sample_area    
                 )
 
@@ -1486,9 +1485,9 @@ class ExportDialog(QDialog):
                 )
 
         form.addRow(
-                "random patches from area", 
+                "null crops from selected polygons",
                 self.area_sample_count
-                )
+                ) 
 
         # additional windows around each target tree -- provides displaced examples where tree isnt centered    
         
@@ -1530,7 +1529,7 @@ class ExportDialog(QDialog):
         form.addRow(self.allow_partial_trees)
         
         self.sample_max_attempts = self.integer(
-                0, 
+                1, 
                 100_000, 
                 self.saved.get("sample_max_attempts", 496), 
                 " iterations",
@@ -1628,7 +1627,7 @@ class ExportDialog(QDialog):
                 if layer.isEditable():
                     raise ValueError(f"save edits and turn editing off for {layer.name()!r}")
                 selected_count += layer.selectedFeatureCount()
-            if self.selected.isChecked() and selected_count == 0:
+            if self.include_trees.isChecked() and self.selected.isChecked() and selected_count == 0:
                 raise ValueError("no kites are selected in the chosen layers")
             area_layer = self.sample_area.currentLayer()
             if self.area_sample_count.value() > 0:
@@ -1651,6 +1650,8 @@ class ExportDialog(QDialog):
                 raster_id=raster_id, kite_layer_ids=ids,
                 output_parent=str(Path(self.output.text().strip()).expanduser().absolute()),
                 limit=self.limit.value() or None, selected=self.selected.isChecked(),
+                include_tree_crops=self.include_trees.isChecked(), 
+                tag_fields=tuple(name.strip() for name in self.tag_fields.text().split(",") if name.strip()),
                 padding_fraction=self.padding.value() / 100,
                 min_padding_pixels=self.minimum.value(), crop_mode=self.mode.currentData(),
                 fixed_size=self.fixed.value(), max_crop_pixels=round(self.max_area.value() * 1_000_000),

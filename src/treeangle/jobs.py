@@ -30,7 +30,8 @@ from .geometry import Kite, Point
 
 from .collector import (
         open_raster, collect_trees, display_ranges, write_json, make_sample, write_tiff, 
-        make_png, coco_annotation, write_png, write_split_groups, write_vectors, draw_review, new_coco
+        make_png, coco_annotation, write_png, write_split_groups, write_vectors, 
+        draw_review, new_coco, collect_null_areas, make_null_sample, sample_tags
         )
 
 
@@ -67,14 +68,27 @@ class ExportJob(QObject):
             self.trees, self.targets, self.index = collect_trees(
                     project, self.options, self.crs
                     )
+            if not self.options.include_tree_crops:
+                self.targets=[]
             # all centered crops processed before offsets 
             self.requests = [(number, "centered") for number in self.targets]
             for number in self.targets:
                 for _ in range(self.options.offsets_per_tree):
                     self.requests.append((number, "offset"))
+            if self.options.area_sample_count:
+                self.areas=collect_null_areas(project, 
+                                              self.options, 
+                                              self.crs,
+                                              self.transform, 
+                                              self.source 
+                                              )
+            if not self.requests:
+                raise ValueError("nothing requested")
 
             self.ranges = display_ranges(self.source, self.options)
-            stamp = datetime.now(timezone.utc).strftime("run_%y%m%d_%fZ")
+
+            # run name declaration 
+            stamp = datetime.now(timezone.utc).strftime("run_%y%m%d_%H%M")
             self.output_dir = Path(self.options.output_parent).expanduser() / stamp
             self.output_dir.mkdir(parents=True, exist_ok=False)
             for name in ("png", "tif", "_pending"):
@@ -103,17 +117,20 @@ class ExportJob(QObject):
 
 
     def export_one(self, number, kind="centered"):
-        tree = self.trees[number]
-        sample = make_sample(tree, 
-                             self.trees,
-                             self.index,
-                             self.source,
-                             self.transform,
-                             self.options, 
-                             used_windows = self.used_windows, 
-                             rng=self.rng, 
-                             kind=kind
-                             )
+        target = self.areas if kind == "null" else self.trees[number]
+        sampler = make_null_sample if kind == "null" else make_sample
+        sample = sampler(
+                target,
+                self.trees,
+                self.index,
+                self.source,
+                self.transform,
+                self.options, 
+                used_windows = self.used_windows, 
+                rng=self.rng, 
+                **({} if kind == "null" else {"kind": kind})
+                )
+
         if sample is None:
             return 
         sample_key = sample["sample_id"]
@@ -143,6 +160,7 @@ class ExportJob(QObject):
                         {
                         "annotation_id": annotation_id,
                         "tree_id": self.trees[number].tree_id,
+                        "attributes": self.trees[number].attributes, 
                         "is_target": label["is_target"], "truncated": label["truncated"],
                         "coco_order_as_original_p_indices": order, "native_label": label
                         }
@@ -188,16 +206,19 @@ class ExportJob(QObject):
             self.finish()
             return
         number, kind = self.requests[self.position]
+        target_id = "null" if kind == "null" else self.trees[number].tree_id
         self.progress.setLabelText(
-                f"{self.position + 1}/{len(self.requests)}: {self.trees[number].tree_id}"
+                f"{self.position + 1}/{len(self.requests)}: {target_id}"
                 )
         try:
             self.export_one(number, kind)
         except OSError as error:
-            self.errors.append({"tree_id": self.trees[number].tree_id, "error": str(error)})
+            self.errors.append({"tree_id": target_id, "error": str(error)})
             self.cancelled = True  # Stop repeated writes after a filesystem failure.
         except Exception as error:
-            self.errors.append({"tree_id": self.trees[number].tree_id, "error": str(error)})
+            self.errors.append({"tree_id": target_id, "error": str(error)})
+            if kind == "null":
+                self.requests = self.requests[:self.position + 1]
         self.position += 1
         self.progress.setValue(self.position)
         if self.position % 50 == 0:
@@ -228,8 +249,10 @@ class ExportJob(QObject):
         finalized = False
         try:
             if self.output_dir is not None:
-                write_json(self.output_dir / "png" / "_annotations.coco.json", self.coco)
                 write_split_groups(self.output_dir / "split_groups.csv", self.samples)
+                for image, sample in zip(self.coco["images"], self.samples):
+                    image["treeangle"] = {"split_group": sample["split_group"], 
+                                          "tags": sample_tags(sample, self.options.tag_fields, self.output_dir.name)}
                 if self.samples:
                     write_vectors(self.output_dir / "kites.gpkg", self.trees, self.used,
                                   self.samples, self.crs, self.transform)

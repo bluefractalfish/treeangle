@@ -35,6 +35,11 @@ class ExportOptions:
     output_parent: str | None = None 
     limit: int | None = None
     selected: bool = False
+    include_tree_crops: bool = True 
+    tag_fields: tuple[str,...] = ("exposure", 
+                                  "confidence",
+                                  "damage_class_name",
+                                  "ground_type")
     padding_fraction: float = 0.15
     min_padding_pixels: int = 16
     crop_mode: str = "bbox"  # bbox, square, fixed
@@ -68,10 +73,12 @@ class ExportOptions:
             raise ValueError("unknown PNG contrast settings")
         if not math.isfinite(self.padding_fraction) or self.padding_fraction < 0:
             raise ValueError("paddding must be finite and nonnegative")
-        for name in ("min_padding_pixels", "fixed_size", "max_crop_pixels", "png_max_size"):
+        for name in ("min_padding_pixels", "fixed_size", "max_crop_pixels", "png_max_size", 
+                     "area_sample_count", "offsets_per_tree", "offset_min_px", "offset_max_px", 
+                     "sample_max_attempts"):
             value = getattr(self, name)
             # Zero means "use the native crop dimensions" for PNG output.
-            minimum = 0 if name in {"min_padding_pixels", "png_max_size"} else 1
+            minimum = 1 if name in {"fixed_size", "max_crop_pixels", "sample_max_attempts"} else 0 
             if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
         if self.limit is not None and (isinstance(self.limit, bool) or

@@ -189,13 +189,15 @@ def split_groups(samples):
                 join(i, j)
         active.append(i)
 
-        # The same tree may appear as a neighbor in more than one crop.
-        for link in samples[i].get("annotations", []):
-            tree_id = link["tree_id"]
-            if tree_id in seen:
-                join(i, seen[tree_id])
+        # shared trees and all samples of a chosen null polygon stay together 
+        keys = [("tree", link["tree_id"]) for link in samples[i].get("annotations", [])]
+        if "region_id" in samples[i]:
+            keys.append(("region", samples[i]["region_id"]))
+        for key in keys:
+            if key in seen:
+                join(i, seen[key])
             else:
-                seen[tree_id] = i
+                seen[key] = i
 
     return [f"group_{root(i):06d}" for i in range(len(samples))]
 
@@ -209,7 +211,6 @@ def stretch_rgb(arrays, valid, ranges):
     return np.ascontiguousarray(np.stack(channels, axis=-1))
 
 
-    
 
 def is_export_source(layer):
     required = {"tree_id", *[f"p{i}_{a}" for i in range(4) for a in "xy"]}
@@ -266,6 +267,8 @@ def open_raster(raster):
     
     transform = source.GetGeoTransform(can_return_null=True)
     crs = QgsCoordinateReferenceSystem()
+    if not crs.createFromWkt(source.GetProjectionRef()):
+        raise ValueError("the source needs a valid CRS")
     world_to_pixel(pixel_to_world([0, 0], transform), transform)
     return source, crs, list(transform)
 
@@ -293,6 +296,33 @@ def tree_from_feature(feature, layer, transform):
                 layer.source(), int(feature.id()), layer.crs().toWkt())
 
 
+
+def collect_null_areas(project, options, raster_crs, transform, source):
+    layer = project.mapLayer(options.sample_area_layer_id)
+    mapper = QgsCoordinateTransform(layer.crs(), raster_crs, project)
+    areas, size = [], options.fixed_size 
+    for feature in layer.getSelectedFeatures():
+        shape = QgsGeometry(feature.geometry())
+        xmin, ymin, xmax, ymax = pixel_bbox([
+            world_to_pixel([p.x(), p.y()], transform) for p in shape.vertices()])
+        bounds = (
+                  max(0, math.ceil(xmin)),
+                  max(0, math.ceil(ymin)), 
+                  min(source.RasterXSize - size, math.floor(xmax-size)), 
+                  min(source.RasterYSize - size, math.floor(ymax-size))
+                  ) 
+        if bounds[0] <= bounds[2] and bounds[1] <= bounds[3]:
+            areas.append(
+                    {
+                        "geometry": shape, 
+                        "bounds": bounds, 
+                        "region_id": str(feature.id()), 
+                        "attributes": {
+                                name: plain(feature[name]) 
+                                for name in layer.fields.names()
+                                }
+                        })
+    return sorted(areas, key=lambda area: area["region_id"])
 
 def collect_trees(project, options, raster_crs):
     trees, targets, ids, keys, sources = [], [], set(), set(), set()
@@ -503,10 +533,78 @@ def make_sample(target,
                 "padding_clipped": padding_clipped,
                 "nearby": nearby
                 }
-        raise ValueError(f"no unique valid {kind} window after {attempts} attempts")
 
 
+def make_null_sample(areas, 
+                     trees,
+                     index, 
+                     source, 
+                     transform,
+                     options,
+                     *,
+                     used_windows, 
+                     rng 
+                     ):
+    size = options.fixed_size 
+    weights = [
+                (a["bounds"][2] - a["bounds"][0] + 1) * 
+                (a["bounds"][3] - a["bounds"][1] + 1) for a in areas
+               ]
+    for _ in range(options.sample_max_attempts):
+        area = rng.choices(areas, weights=weights, k=1)[0]
+        xmin, ymin, xmax, ymax = area["bounds"]
+        left, top = rng.randint(xmin, xmax), rng.randint(ymin, ymax)
+        window = [left, top, size, size]
+        if tuple(window) in used_windows:
+            continue 
+        crop_transform = shifted_transform(transform, left, top)
+        corners = [
+                pixel_to_world(p, crop_transform) 
+                for p in bbox_ring([0, 0, size, size ])
+                ]
+        footprint = polygon(corners) 
+        if not area["geometry"].contains(footprint):
+            continue 
+        if any(
+                trees[n].geometry.intersects(footprint) 
+                for n in index.intersects(footprint.boundingBox())
+                ):
+            continue 
+        valid = np.ones((size, size), dtype=bool)
+        for number in set(options.rgb_bands):
+            band = source.GetRasterBand(number)
+            valid &= (
+                    band.GetMaskBand().ReadAsArray("window") > 0 ) & np.isfinite(band.ReadAsArray(*window)
+                    ) 
+            if not valid.all(): 
+                continue 
+        return {"sample_id": f"null_{left}_{top}_{size}_{size}", "sample_kind": "null",
+                "target_tree_id": "", "region_id": area["region_id"],
+                "region_attributes": area["attributes"], "window": window,
+                "geotransform": crop_transform, "corners": corners,
+                "padding_clipped": False, "nearby": []} 
 
+    raise ValueError(f"no tree-free, valid null crop after {options.sample_max_attempts} attempts; "
+                     "remaining null requests stopped")
+
+
+def sample_tags(sample, fields, export_id): 
+    aliases = {"exposure": "visibility", "damage_class_name":"damage_class", "ground_type":"ground"}
+    tags = {"group_"+sample["split_group"], "sample_"+sample["sample_kind"]}
+    if "region_id" in sample:
+        tags.add(f"region_{export_id}_{sample['region_id']}")
+    attributes = [link["attributes"] for link in sample["annotations"]]
+    attributes.append(sample.get("region_attributes", {}))
+    for attrs in attributes:
+        for field in fields:
+            if attrs.get(field) is not None and str(attrs[field]).strip():
+                tags.add(f"{aliases.get(field, field)}_{attrs[field]}")
+    return sorted(
+            {
+                re.sub(r"[^a-z0-9_-]+", "_", tag.lower()).strip("_")[:64] 
+                for tag in tags
+            }
+        )
 def write_tiff(source, path, sample):
     image = gdal.Translate(str(path), source, options=gdal.TranslateOptions(
         format="GTiff", srcWin=sample["window"], overviewLevel="NONE", strict=True,
@@ -607,6 +705,7 @@ def write_split_groups(path, samples):
         writer = csv.writer(handle)
         writer.writerow(["file_name", "target_tree_id", "split_group"])
         for sample, group in zip(samples, groups):
+            group = f"{path.parent.name}_{group}"
             sample["split_group"] = group
             writer.writerow([Path(sample["png"]).name, sample["target_tree_id"], group])
 
