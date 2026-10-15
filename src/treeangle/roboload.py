@@ -20,14 +20,14 @@ from tempfile import TemporaryDirectory
 # CONFIGURATION — EDIT THESE
 # ============================================================
 
-EXPORT = Path("/home/rhea/B/ENDERLIN_TA/export_run")
-OUTPUT = Path("/home/rhea/B/ENDERLIN_TA/roboflow_dataset")
+EXPORT = Path("/home/gaia/W/projects/enderlin/3.6/run_261011_2203/run_261011_2204/")
+OUTPUT = Path("/home/gaia/W/projects/enderlin/3.6/run_261011_2203/run_261011_2204/dataset")
 
 WORKSPACE = "tornado-ml"
-PROJECT = ""
+PROJECT = "v0-11"
 API_KEY = os.getenv("ROBOFLOW_API_KEY", "")
 
-UPLOAD = True         # True = split AND upload
+UPLOAD = False         # True = split AND upload
 SEED = 42
 RATIOS = (0.70, 0.20, 0.10)
 
@@ -486,7 +486,7 @@ def upload_dataset(output):
 
 def main():
     output = prepare_dataset()
-
+    print("running")
     if UPLOAD:
         upload_dataset(output)
     else:

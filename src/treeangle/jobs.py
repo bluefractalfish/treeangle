@@ -75,13 +75,22 @@ class ExportJob(QObject):
             for number in self.targets:
                 for _ in range(self.options.offsets_per_tree):
                     self.requests.append((number, "offset"))
-            if self.options.area_sample_count:
+            self.areas=[]
+            if self.options.area_sample_count>0:
                 self.areas=collect_null_areas(project, 
                                               self.options, 
                                               self.crs,
                                               self.transform, 
                                               self.source 
                                               )
+                if not self.areas:
+                    raise ValueError("nothing requested")
+
+                self.requests.extend(
+                        (None, "null")
+                        for _ in range(self.options.area_sample_count)
+                        )
+
             if not self.requests:
                 raise ValueError("nothing requested")
 

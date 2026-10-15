@@ -299,10 +299,19 @@ def tree_from_feature(feature, layer, transform):
 
 def collect_null_areas(project, options, raster_crs, transform, source):
     layer = project.mapLayer(options.sample_area_layer_id)
+    if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+        raise ValueError("choose a valid null-area polygon layer")
+
+    if layer.selectedFeatureCount() == 0:
+        raise ValueError(
+            "select one or more polygons in the null-area layer "
+            "before exporting."
+        )
     mapper = QgsCoordinateTransform(layer.crs(), raster_crs, project)
     areas, size = [], options.fixed_size 
     for feature in layer.getSelectedFeatures():
         shape = QgsGeometry(feature.geometry())
+        shape.transform(mapper)
         xmin, ymin, xmax, ymax = pixel_bbox([
             world_to_pixel([p.x(), p.y()], transform) for p in shape.vertices()])
         bounds = (
@@ -319,7 +328,7 @@ def collect_null_areas(project, options, raster_crs, transform, source):
                         "region_id": str(feature.id()), 
                         "attributes": {
                                 name: plain(feature[name]) 
-                                for name in layer.fields.names()
+                                for name in layer.fields().names()
                                 }
                         })
     return sorted(areas, key=lambda area: area["region_id"])
@@ -573,11 +582,15 @@ def make_null_sample(areas,
         valid = np.ones((size, size), dtype=bool)
         for number in set(options.rgb_bands):
             band = source.GetRasterBand(number)
-            valid &= (
-                    band.GetMaskBand().ReadAsArray("window") > 0 ) & np.isfinite(band.ReadAsArray(*window)
-                    ) 
-            if not valid.all(): 
-                continue 
+            data = band.ReadAsArray(*window)
+            mask = band.GetMaskBand().ReadAsArray(*window)
+            if data is None or mask is None:
+                raise ValueError("data is None")
+
+            valid &= (mask > 0) & np.isfinite(data) 
+            
+        if not valid.all(): 
+            continue 
         return {"sample_id": f"null_{left}_{top}_{size}_{size}", "sample_kind": "null",
                 "target_tree_id": "", "region_id": area["region_id"],
                 "region_attributes": area["attributes"], "window": window,
